@@ -39,7 +39,7 @@ def get_max_sequence_length(sequences):
         length.extend([sequences[i].size])
     return int(np.asarray(length).max())
 
-def get_padded_data(train_data, train_characters):
+def get_padded_data(train_data, train_characters, padding=True):
     max_length_data = 0
     max_length_characters = 0
     # Get the maximum length of each arrays
@@ -52,7 +52,7 @@ def get_padded_data(train_data, train_characters):
         #    max_length_characters = len(train_characters[i])
     # Pad each arrays to be the same length
     for i in xrange(len(train_data)):
-        if len(train_data[i]) != max_length_data:
+        if padding and len(train_data[i]) != max_length_data:
             pad_length = max_length_data-len(train_data[i])
             pad = np.full((pad_length, 3), 0)
             pad[:,2] = 2.0
@@ -454,13 +454,13 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
         group_set_training.append(tmp)
     for i in xrange(len(valid_data)):
         tmp = []
-        tmp.append(valid_data)
-        tmp.append(train_characters[i])
+        tmp.append(valid_data[i])
+        tmp.append(valid_characters[i])
         group_set_validation.append(tmp)
 
     # Chainer Iteration class for the mini-batches
     #train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=True, shuffle=True)
-    train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=True, shuffle=False)
+    train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=False, shuffle=False)
     valid_iter = chainer.iterators.SerialIterator(group_set_validation, 256, repeat=False, shuffle=True)
 
 
@@ -521,11 +521,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
             model.zerograds()
 
             # @TODO: Make the backpropagation length dynamic
-            if t_max < 1600:
-                back_prop_len = t_max + 1
-            else:
-                back_prop_len = t_max / 2
-
+            back_prop_len = t_max + 1 if t_max < 1600 else t_max / 2
             back_prop_len = 50
 
             # For each data in the batchsize run the training
@@ -558,18 +554,13 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
             throuput = t_max/(cur_at - now)
 
             # Update gloabl statistics
-            if losses_network is None:
-                losses_network = xp.copy(loss_network)
-                losses_complex = xp.copy(loss_complex_i.data)
-            else:
-                losses_network = xp.concatenate((losses_network, loss_network), axis=0)
-                losses_complex = xp.concatenate((losses_complex, loss_complex_i.data), axis=0)
+            losses_network = xp.copy(loss_network) if losses_network is None else xp.concatenate((losses_network, loss_network), axis=0)
+            losses_complex = xp.copy(loss_complex_i.data) if losses_network is None else xp.concatenate((losses_complex, loss_complex_i.data), axis=0)
 
             model.reset_state()
                 
         """ All the training mini-batches have been processed """
-        #if train_iter.is_new_epoch:
-        if True:
+        if train_iter.is_new_epoch:
             n_batches = None
 
             # Global results for one epoch
@@ -641,26 +632,25 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                     os.makedirs(save_dir)
 
                 logger.info("Saving the results for epoch {}".format(epoch+1))
-                np.save('loss_network_train', save_dir + '/' + accum_loss_network_train_cpu)
-                np.save('loss_complex_train', save_dir + '/' + accum_loss_complex_train_cpu)
+                np.save(save_dir + '/loss_network_train', accum_loss_network_train_cpu)
+                np.save(save_dir + '/loss_complex_train', accum_loss_complex_train_cpu)
 
                 logger.info("Saving the model and the optimizer for epoch {}".format(epoch+1))
-                serializers.save_npz(save_dir + '/model-' + str(epoch), model)
-                serializers.save_npz(save_dir + '/state-' + str(epoch), optimizer)
+                chainer.serializers.save_npz(save_dir + '/model-' + str(epoch), model)
+                chainer.serializers.save_npz(save_dir + '/state-' + str(epoch), optimizer)
 
             """ Validation step """
             prob_bias = 0.0
             losses_valid = None
-            #for valid_batch in valid_iter:
-            valid_batches = [valid_iter.next()]
-            for valid_batch in valid_batches:
-                valid_data_batch, valid_characters_batch = get_padded_data(valid_batch[:, 0], valid_batch[:, 1])
+            for valid_batch in valid_iter:
+                valid_batch = np.array(valid_batch)
+                valid_data_batch, valid_characters_batch = get_padded_data(valid_batch[:, 0], valid_batch[:, 1], False)
                 offset_valid_batch_size, t_max_valid, x_dim_valid = valid_data_batch.shape
 
                 # One-hot encoding of character for all the sequence
                 cs_data = xp.zeros((offset_valid_batch_size, n_chars, n_max_seq_length))
                 ls_data = xp.zeros((offset_valid_batch_size, 1))
-                for j in xrange(valid_data_batch):
+                for j in xrange(len(valid_data_batch)):
                     for k in xrange(len(valid_characters_batch[j])):
                         length = valid_characters_batch[j][k]
                         cs_data[j, length, k] = 1.0
@@ -686,7 +676,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                 model.reset_state()
 
             # Invalidate the iteration count for the next epoch
-            valid_batch.reset()
+            valid_iter.reset()
 
             """ Statistics for validation """
             losses_network_cpu = losses_valid if xp == np else cuda.to_cpu(losses_valid)
@@ -708,15 +698,14 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
             """ Create the best fit model and optimizer """
             if accum_loss_network_valid[epoch, 0] < min_valid_loss[0] and accum_loss_network_valid[epoch, 0] < thr_valid_loss:
                 logger.info("Best fit for model and optmizer was found, saving them")
-                serializers.save_npz(save_dir + '/model-best', model)
-                serializers.save_npz(save_dir + '/state-best', optimizer)
+                chainer.serializers.save_npz(save_dir + '/model-best', model)
+                chainer.serializers.save_npz(save_dir + '/state-best', optimizer)
                 min_valid_loss[0] = accum_loss_network_valid[epoch, 0]
 
             if epoch % save_interval:
                 accum_loss_network_valid_cpu = accum_loss_network_valid if xp == np else cuda.to_cpu(accum_loss_network_valid)
-                np.save('loss_network_valid', accum_loss_network_valid_cpu)
-                
-            exit()
+                np.save(save_dir + '/loss_network_valid', accum_loss_network_valid_cpu)
+
 
 if __name__ == '__main__':
     log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

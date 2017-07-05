@@ -1,7 +1,21 @@
-handwriting_synthesis
+Handwriting Synthesis
 ==============================
 
-Based on Generating Sequences With Recurrent Neural Network by Alex Graves
+Based on "Generating Sequences With Recurrent Neural Network" by Alex Graves
+
+Experiments
+------------
+
+- An interactive vizualization was created to illustrate some of the concepts of the papers. It can
+  be found on [distill](http://distill.pub/2016/handwriting/)
+
+
+Running the training process
+-----------
+```bash
+$ make train
+$ make ARGS="--max_batchsize=64" train # with arguments
+```
 
 Project Organization
 ------------
@@ -52,5 +66,3 @@ Project Organization
 
 
 --------
-
-<p><small>Project based on the <a target="_blank" href="https://drivendata.github.io/cookiecutter-data-science/">cookiecutter data science project template</a>. #cookiecutterdatascience</small></p>
