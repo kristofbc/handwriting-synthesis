@@ -7,6 +7,7 @@ import time
 import os
 import click
 import logging
+import math
 
 import numpy as np
 import cPickle as pickle
@@ -405,13 +406,6 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
     training_suffix = "{0}".format("training")
     state_suffix = "{0}".format("state")
 
-    """ Enable cupy, if available """
-    if gpu > -1:
-        logger.info("Enabling CUpy")
-        xp = cuda.cupy
-    else:
-        xp = np
-
     """ Fetching the model and the inputs """
     logger.info("Fetching the model and the inputs")
     train_data = load_data(data_dir + "/train/train_data")
@@ -443,6 +437,15 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
     if resume:
         logger.info("Loading state from {}".format(output_dir + '/' + resume))
         chainer.serializers.load_npz(output_dir + "/" + resume, optimizer)
+
+    """ Enable cupy, if available """
+    if gpu > -1:
+        logger.info("Enabling CUpy")
+        cuda.get_decide(gpu).use()
+        xp = cuda.cupy
+        model.to_gpu()
+    else:
+        xp = np
 
     # Create an array of [train_data, train_characters]
     group_set_training = []
@@ -492,7 +495,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
         # count number of backward() (computaion of gradients). this value is important for # complex_loss! See Graves 2011 p5 equation 18 for detail !
         if not isinstance(n_batches, variable.Variable):
             n_batches_counter = xp.zeros(1)
-            for i in xrange(len(train_data_batch)):
+            for i in xrange(int(math.floor(len(group_set_training)/batch_size))):
                 n_batches_counter += 1
 
             n_batches = chainer.Variable(xp.asarray(n_batches_counter).astype(xp.int32), volatile='auto')
