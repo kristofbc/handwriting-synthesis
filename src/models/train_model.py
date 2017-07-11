@@ -75,6 +75,7 @@ class Model(chainer.Chain):
             awn_x_l1  = AdaptiveWeightNoise((3+1), 4*n_rnn_cells, wscale, nobias=False, use_weight_noise=use_weight_noise),
             awn_x_l2  = AdaptiveWeightNoise((3+1), 4*n_rnn_cells, wscale, nobias=False, use_weight_noise=use_weight_noise),
             awn_x_l3  = AdaptiveWeightNoise((3+1), 4*n_rnn_cells, wscale, nobias=False, use_weight_noise=use_weight_noise),
+
             awn_l1_ws = AdaptiveWeightNoise((n_rnn_cells+1),(3*n_win_units), wscale, nobias=False, use_weight_noise=use_weight_noise),
             awn_ws_l1 = AdaptiveWeightNoise((n_vocab + 1), (4*n_rnn_cells), wscale, nobias=False, use_weight_noise=use_weight_noise),
             awn_ws_l2 = AdaptiveWeightNoise((n_vocab + 1), (4*n_rnn_cells), wscale, nobias=False, use_weight_noise=use_weight_noise),
@@ -386,13 +387,15 @@ class ModelPeephole(chainer.Chain):
 @click.option('--gpu', type=click.INT, default=-1, help='GPU ID (negative value is CPU).')
 @click.option('--adaptive_noise', type=click.INT, default=1, help='Use Adaptive Weight Noise in the training process.')
 @click.option('--update_weight', type=click.INT, default=1, help='Update weights in the training process.')
+@click.option('--use_weight_noise', type=click.INT, default=1, help='Use weight noise in the training process.')
 @click.option('--save_interval', type=click.INT, default=1, help='How often the model should be saved.')
+@click.option('--truncated_back_prop_len', type=click.INT, default=50, help='Number of backpropagation before stopping.')
 @click.option('--rnn_layers_number', type=click.INT, default=3, help='Number of layers for the RNN.')
 @click.option('--rnn_cells_number', type=click.INT, default=400, help='Number of LSTM cells per layer.')
 @click.option('--win_unit_number', type=click.INT, default=10, help='Number of soft-window components.')
 @click.option('--mix_comp_number', type=click.INT, default=20, help='Numver of Gaussian components for mixture density output.')
 @click.option('--random_seed', type=click.INT, default=None, help='Numver of Gaussian components for mixture density output.')
-def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, gpu, adaptive_noise, update_weight, save_interval, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed):
+def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, truncated_back_prop_len, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed):
     """ Train the model based on the data saved in ../processed """
     logger = logging.getLogger(__name__)
     logger.info('Training the model')
@@ -422,7 +425,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
 
     logger.info("Creating the model")
     if peephole == 0:
-        model = Model(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number)
+        model = Model(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number, use_weight_noise=True if use_weight_noise == 1 else False)
     else:
         model = ModelPeephole(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number)
 
@@ -441,7 +444,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
     """ Enable cupy, if available """
     if gpu > -1:
         logger.info("Enabling CUpy")
-        cuda.get_decide(gpu).use()
+        cuda.get_device(gpu).use()
         xp = cuda.cupy
         model.to_gpu()
     else:
@@ -487,7 +490,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
         elapsed_forward = 0
         elapsed_backward = 0
         losses_network = None
-        lossed_complex = None
+        losses_complex = None
 
         # The mini-batch should be padded to be the same length
         train_data_batch, train_characters_batch = get_padded_data(batch[:, 0], batch[:, 1])
@@ -505,6 +508,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
         if len(train_data_batch) > 1:
             now = time.time()
             offset_batch_size, t_max, x_dim = train_data_batch.shape
+            if truncated_back_prop_len is not -1:
+                x_dim = truncated_back_prop_len if x_dim > truncated_back_prop_len else x_dim
 
             # One-hot encoding of character for all the sequence
             cs_data = xp.zeros((offset_batch_size, n_chars, n_max_seq_length))
@@ -524,8 +529,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
             model.zerograds()
 
             # @TODO: Make the backpropagation length dynamic
-            back_prop_len = t_max + 1 if t_max < 1600 else t_max / 2
-            back_prop_len = 50
+            #back_prop_len = t_max + 1 if t_max < 1600 else t_max / 2
+            back_prop_len = truncated_back_prop_len
 
             # For each data in the batchsize run the training
             for t in xrange(t_max-1):
@@ -543,8 +548,15 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
 
                 # Backprop the error
                 if t > 0:
+                    # Complete backprop
+                    if back_prop_len == -1:
+                        t_backward = time.time()
+                        accum_loss.backward()
+                        accum_loss.unchain_backward()
+                        accum_loss = 0
+                        elapsed_backward += time.time() - t_backward
                     # Truncated backprop
-                    if (t+1) % back_prop_len == back_prop_len-1 or t == t_max-3:
+                    elif (t+1) % back_prop_len == back_prop_len-1 or t == t_max-3:
                         t_backward = time.time()
                         accum_loss.backward()
                         accum_loss.unchain_backward()
@@ -556,9 +568,9 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
             cur_at = time.time()
             throuput = t_max/(cur_at - now)
 
-            # Update gloabl statistics
+            # Update global statistics
             losses_network = xp.copy(loss_network) if losses_network is None else xp.concatenate((losses_network, loss_network), axis=0)
-            losses_complex = xp.copy(loss_complex_i.data) if losses_network is None else xp.concatenate((losses_complex, loss_complex_i.data), axis=0)
+            losses_complex = xp.copy(loss_complex_i.data) if losses_complex is None else xp.concatenate((losses_complex, loss_complex_i.data), axis=0)
 
             model.reset_state()
                 
@@ -649,6 +661,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                 valid_batch = np.array(valid_batch)
                 valid_data_batch, valid_characters_batch = get_padded_data(valid_batch[:, 0], valid_batch[:, 1], False)
                 offset_valid_batch_size, t_max_valid, x_dim_valid = valid_data_batch.shape
+                if truncated_back_prop_len is not -1:
+                    x_dim_valid = truncated_back_prop_len if x_dim_valid > truncated_back_prop_len else x_dim_valid
 
                 # One-hot encoding of character for all the sequence
                 cs_data = xp.zeros((offset_valid_batch_size, n_chars, n_max_seq_length))
@@ -667,8 +681,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                 
                 # For each data in the batchsize run the validation
                 for t in xrange(t_max-1):
-                    x_now = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t, 0:x_dim]).astype(xp.float32), volatile='on')
-                    x_next = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t+1, 0:x_dim]).astype(xp.float32), volatile='on')
+                    x_now = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t, 0:x_dim_valid]).astype(xp.float32), volatile='on')
+                    x_next = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t+1, 0:x_dim_valid]).astype(xp.float32), volatile='on')
                     logger.info("Validating data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1))
                     loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, renew_weights=False, testing=True)
                     loss_network += loss_i.data
