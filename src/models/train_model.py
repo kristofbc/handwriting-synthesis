@@ -390,12 +390,13 @@ class ModelPeephole(chainer.Chain):
 @click.option('--use_weight_noise', type=click.INT, default=1, help='Use weight noise in the training process.')
 @click.option('--save_interval', type=click.INT, default=1, help='How often the model should be saved.')
 @click.option('--truncated_back_prop_len', type=click.INT, default=50, help='Number of backpropagation before stopping.')
+@click.option('--truncated_data_samples', type=click.INT, default=500, help='Number of samples to use inside a data.')
 @click.option('--rnn_layers_number', type=click.INT, default=3, help='Number of layers for the RNN.')
 @click.option('--rnn_cells_number', type=click.INT, default=400, help='Number of LSTM cells per layer.')
 @click.option('--win_unit_number', type=click.INT, default=10, help='Number of soft-window components.')
 @click.option('--mix_comp_number', type=click.INT, default=20, help='Numver of Gaussian components for mixture density output.')
 @click.option('--random_seed', type=click.INT, default=None, help='Numver of Gaussian components for mixture density output.')
-def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, truncated_back_prop_len, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed):
+def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed):
     """ Train the model based on the data saved in ../processed """
     logger = logging.getLogger(__name__)
     logger.info('Training the model')
@@ -466,7 +467,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
 
     # Chainer Iteration class for the mini-batches
     #train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=True, shuffle=True)
-    train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=False, shuffle=False)
+    train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=True, shuffle=True)
     valid_iter = chainer.iterators.SerialIterator(group_set_validation, 256, repeat=False, shuffle=True)
 
 
@@ -508,8 +509,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
         if len(train_data_batch) > 1:
             now = time.time()
             offset_batch_size, t_max, x_dim = train_data_batch.shape
-            if truncated_back_prop_len is not -1:
-                x_dim = truncated_back_prop_len if x_dim > truncated_back_prop_len else x_dim
+            if truncated_data_samples is not -1:
+                t_max = truncated_data_samples if t_max > truncated_data_samples else t_max
 
             # One-hot encoding of character for all the sequence
             cs_data = xp.zeros((offset_batch_size, n_chars, n_max_seq_length))
@@ -661,8 +662,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                 valid_batch = np.array(valid_batch)
                 valid_data_batch, valid_characters_batch = get_padded_data(valid_batch[:, 0], valid_batch[:, 1], False)
                 offset_valid_batch_size, t_max_valid, x_dim_valid = valid_data_batch.shape
-                if truncated_back_prop_len is not -1:
-                    x_dim_valid = truncated_back_prop_len if x_dim_valid > truncated_back_prop_len else x_dim_valid
+                if truncated_data_samples is not -1:
+                    t_max_valid = truncated_data_samples if t_max_valid > truncated_data_samples else t_max_valid
 
                 # One-hot encoding of character for all the sequence
                 cs_data = xp.zeros((offset_valid_batch_size, n_chars, n_max_seq_length))
