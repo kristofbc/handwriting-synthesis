@@ -724,6 +724,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                 accum_loss_network_valid_cpu = accum_loss_network_valid if xp == np else cuda.to_cpu(accum_loss_network_valid)
                 np.save(save_dir + '/loss_network_valid', accum_loss_network_valid_cpu)
 
+    # Subsequent scripts can use the results of this network without having to open the npy files
+    return accum_loss_network_train, accum_loss_network_valid
 
 if __name__ == '__main__':
     log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
