@@ -51,6 +51,7 @@ def get_padded_data(train_data, train_characters, padding=True):
             max_length_data = len(train_data[i])
         #if len(train_characters[i]) > max_length_characters:
         #    max_length_characters = len(train_characters[i])
+
     # Pad each arrays to be the same length
     for i in xrange(len(train_data)):
         if padding and len(train_data[i]) != max_length_data:
@@ -376,26 +377,6 @@ class ModelPeephole(chainer.Chain):
 # ===============================================
 
 
-@click.command()
-@click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWriting', help='Directory containing the data.')
-@click.option('--output_dir', type=click.Path(exists=False), default='models', help='Directory for model checkpoints.')
-@click.option('--batch_size', type=click.INT, default=64, help='Size of the mini-batches.')
-@click.option('--peephole', type=click.INT, default=0, help='LSTM with Peephole.')
-@click.option('--epochs', type=click.INT, default=500, help='Number of epoch for training.')
-@click.option('--grad_clip', type=click.INT, default=0, help='Threshold for the gradient clipping.')
-@click.option('--resume', type=click.STRING, default='', help='Resume the optimization from a snapshot.')
-@click.option('--gpu', type=click.INT, default=-1, help='GPU ID (negative value is CPU).')
-@click.option('--adaptive_noise', type=click.INT, default=1, help='Use Adaptive Weight Noise in the training process.')
-@click.option('--update_weight', type=click.INT, default=1, help='Update weights in the training process.')
-@click.option('--use_weight_noise', type=click.INT, default=1, help='Use weight noise in the training process.')
-@click.option('--save_interval', type=click.INT, default=1, help='How often the model should be saved.')
-@click.option('--truncated_back_prop_len', type=click.INT, default=50, help='Number of backpropagation before stopping.')
-@click.option('--truncated_data_samples', type=click.INT, default=500, help='Number of samples to use inside a data.')
-@click.option('--rnn_layers_number', type=click.INT, default=3, help='Number of layers for the RNN.')
-@click.option('--rnn_cells_number', type=click.INT, default=400, help='Number of LSTM cells per layer.')
-@click.option('--win_unit_number', type=click.INT, default=10, help='Number of soft-window components.')
-@click.option('--mix_comp_number', type=click.INT, default=20, help='Numver of Gaussian components for mixture density output.')
-@click.option('--random_seed', type=click.INT, default=None, help='Numver of Gaussian components for mixture density output.')
 def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed):
     """ Train the model based on the data saved in ../processed """
     logger = logging.getLogger(__name__)
@@ -467,7 +448,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
 
     # Chainer Iteration class for the mini-batches
     #train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=True, shuffle=True)
-    train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=True, shuffle=True)
+    train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=True, shuffle=False)
     valid_iter = chainer.iterators.SerialIterator(group_set_validation, 256, repeat=False, shuffle=True)
 
 
@@ -482,16 +463,17 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
     xp.random.seed(random_seed)
     np.random.seed(random_seed)
     n_batches_counter, n_batches = None, None
+
+    t_epoch_start = time.time()
+    elapsed_forward = 0
+    elapsed_backward = 0
+    losses_network = None
+    losses_complex = None
     while train_iter.epoch < epochs:
         epoch = train_iter.epoch
         logger.info("Beginning training for epoch {}".format(epoch+1))
 
         batch = np.array(train_iter.next())
-        t_epoch_start = time.time()
-        elapsed_forward = 0
-        elapsed_backward = 0
-        losses_network = None
-        losses_complex = None
 
         # The mini-batch should be padded to be the same length
         train_data_batch, train_characters_batch = get_padded_data(batch[:, 0], batch[:, 1])
@@ -530,8 +512,9 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
             model.zerograds()
 
             # @TODO: Make the backpropagation length dynamic
-            #back_prop_len = t_max + 1 if t_max < 1600 else t_max / 2
-            back_prop_len = truncated_back_prop_len
+            back_prop_len = t_max + 1 if t_max < 1600 else t_max / 2
+            if truncated_back_prop_len != 0:
+                back_prop_len = truncated_back_prop_len
 
             # For each data in the batchsize run the training
             for t in xrange(t_max-1):
@@ -539,7 +522,11 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                 x_now = chainer.Variable(xp.asarray(train_data_batch[0:offset_batch_size, t, 0:x_dim]).astype(xp.float32))
                 x_next = chainer.Variable(xp.asarray(train_data_batch[0:offset_batch_size, t+1, 0:x_dim]).astype(xp.float32))
                 logger.info("Training data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1))
-                loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, update_weight)
+
+                # The weight are updated only in the first iteration
+                local_update_weight = update_weight if t == 0 else False
+
+                loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, local_update_weight)
 
                 # Get stats
                 accum_loss += F.sum(loss_i)/offset_batch_size
@@ -577,8 +564,6 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                 
         """ All the training mini-batches have been processed """
         if train_iter.is_new_epoch:
-            n_batches = None
-
             # Global results for one epoch
             losses_network_cpu = losses_network if xp == np else cuda.to_cpu(losses_network)
             losses_complex_cpu = losses_complex if xp == np else cuda.to_cpu(losses_complex)
@@ -668,7 +653,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                 # One-hot encoding of character for all the sequence
                 cs_data = xp.zeros((offset_valid_batch_size, n_chars, n_max_seq_length))
                 ls_data = xp.zeros((offset_valid_batch_size, 1))
-                for j in xrange(len(valid_data_batch)):
+                for j in xrange(len(valid_characters_batch)):
                     for k in xrange(len(valid_characters_batch[j])):
                         length = valid_characters_batch[j][k]
                         cs_data[j, length, k] = 1.0
@@ -724,12 +709,50 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                 accum_loss_network_valid_cpu = accum_loss_network_valid if xp == np else cuda.to_cpu(accum_loss_network_valid)
                 np.save(save_dir + '/loss_network_valid', accum_loss_network_valid_cpu)
 
+            """ Reset the variables for the next iteration """
+            n_batches = None
+            t_epoch_start = time.time()
+            elapsed_forward = 0
+            elapsed_backward = 0
+            losses_network = None
+            losses_complex = None
+
     # Subsequent scripts can use the results of this network without having to open the npy files
     return accum_loss_network_train, accum_loss_network_valid
+
+
+# ===============
+# CLI Entry point
+# ===============
+
+
+@click.command()
+@click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWriting', help='Directory containing the data.')
+@click.option('--output_dir', type=click.Path(exists=False), default='models', help='Directory for model checkpoints.')
+@click.option('--batch_size', type=click.INT, default=64, help='Size of the mini-batches.')
+@click.option('--peephole', type=click.INT, default=0, help='LSTM with Peephole.')
+@click.option('--epochs', type=click.INT, default=500, help='Number of epoch for training.')
+@click.option('--grad_clip', type=click.INT, default=0, help='Threshold for the gradient clipping.')
+@click.option('--resume', type=click.STRING, default='', help='Resume the optimization from a snapshot.')
+@click.option('--gpu', type=click.INT, default=-1, help='GPU ID (negative value is CPU).')
+@click.option('--adaptive_noise', type=click.INT, default=1, help='Use Adaptive Weight Noise in the training process.')
+@click.option('--update_weight', type=click.INT, default=1, help='Update weights in the training process.')
+@click.option('--use_weight_noise', type=click.INT, default=1, help='Use weight noise in the training process.')
+@click.option('--save_interval', type=click.INT, default=1, help='How often the model should be saved.')
+@click.option('--truncated_back_prop_len', type=click.INT, default=50, help='Number of backpropagation before stopping.')
+@click.option('--truncated_data_samples', type=click.INT, default=500, help='Number of samples to use inside a data.')
+@click.option('--rnn_layers_number', type=click.INT, default=3, help='Number of layers for the RNN.')
+@click.option('--rnn_cells_number', type=click.INT, default=400, help='Number of LSTM cells per layer.')
+@click.option('--win_unit_number', type=click.INT, default=10, help='Number of soft-window components.')
+@click.option('--mix_comp_number', type=click.INT, default=20, help='Numver of Gaussian components for mixture density output.')
+@click.option('--random_seed', type=click.INT, default=None, help='Number of Gaussian components for mixture density output.')
+def cli(**kwargs):
+    main(**kwargs)
+
 
 if __name__ == '__main__':
     log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     #logging.basicConfig(level=logging.INFO, format=log_fmt, stream=sys.stdout)
     logging.basicConfig(level=logging.INFO, format=log_fmt)
 
-    main()
+    cli()
