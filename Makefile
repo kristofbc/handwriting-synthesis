@@ -75,6 +75,8 @@ test_environment:
 train:
 	python src/models/train_model.py ${ARGS}
 
+predict:
+	python src/models/predict_model.py ${MODEL_DIR} ${MODEL_NAME} ${TEXT} ${ARGS}
 
 
 #################################################################################

@@ -19,7 +19,7 @@ def get_text(data_file, text_files):
             start = 0
             # Parse the line of the text corresponding to the CSR version
             for l in f:
-                l.strip()
+                l = l.rstrip()
                 lines.append(l)
             f.close()
             for j in xrange(len(lines)):
