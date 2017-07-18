@@ -125,8 +125,8 @@ class Model(chainer.Chain):
             if testing:
                 # Generate weights w/o Adaptive Noises
                 def get_weights_for_testing(self):
-                    fW, b = split_axis.split_axis(self.M, numpy.asarray([(self.in_size -1)*self.out_size]), axis=0)
-                    W = reshape.reshape(fW, (self.out_size, self.in_size -1))
+                    fW, b = F.split_axis(self.M, np.asarray([(self.in_size -1)*self.out_size]), axis=0)
+                    W = F.reshape(fW, (self.out_size, self.in_size -1))
                     return W, b
         
                 self.w_x_l1, self.b_x_l1    = get_weights_for_testing(self.awn_x_l1)
