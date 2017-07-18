@@ -131,10 +131,13 @@ def get_normalized_data(train_data, valid_data):
 def get_data_padded(data, callback):
     dest = []
     for arr in data:
+        print(arr)
         l_pad = callback(arr)
         pads = np.zeros((l_pad, 3))
         pads[:, 2] = 2.0
         arr1 = np.r_[np.copy(arr), pads]
+        print(arr1)
+        exit()
         dest.append(arr1)
 
     return dest

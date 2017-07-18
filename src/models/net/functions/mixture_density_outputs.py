@@ -295,9 +295,12 @@ class MixtureDensityOutputs(function.Function):
                     protect_mask[idx, 0] = 0.0
                 
                 xnext[:, 2] = self.eos[:, 0]
-                xnext[:, 2] = numpy.where(eow < 0, xnext[:, 2], 2.)
+                #xnext[:, 2] = numpy.where(eow < 0, xnext[:, 2], 2.)
+                xnext[:, 2] = numpy.where(eow[:, 2] < 0, xnext[:, 2], 2.)
                 self.xnext = xnext
-                loss_t = None
+                #loss_t = None
+                loss_t = xp.zeros((batchsize, 1)).astype(xp.float32)
+                self.Zs = None
                     
         else:
             self.mux   = mux_hat
@@ -486,7 +489,8 @@ class MixtureDensityOutputs(function.Function):
                     
                     
                 xnext[:, 2:] = self.eos[:, 0:1]
-                xnext[:, 2:] = xp.where(eow < 0, self.eos[:, 0:1], 2.)
+                #xnext[:, 2:] = xp.where(eow < 0, self.eos[:, 0:1], 2.)
+                xnext[:, 2:] = xp.where(eow[:, 2:] < 0, self.eos[:, 0:1], 2.)
                 self.xnext = xnext
                 loss_t = xp.zeros((batchsize, 1)).astype(xp.float32)
                 self.Zs = None
@@ -605,5 +609,5 @@ class MixtureDensityOutputs(function.Function):
         return None, None, geos, gpi, gmux, gmuy, gsgmx,  gsgmy, grho,
 
 def mixture_density_outputs(xnext, eow, e_hat, pi_hat, mux_hat, muy_hat, sgmx_hat, sgmy_hat, rho_hat):
-    
+
     return MixtureDensityOutputs()(xnext, eow, e_hat, pi_hat, mux_hat, muy_hat, sgmx_hat, sgmy_hat, rho_hat)
