@@ -448,7 +448,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
 
     # Chainer Iteration class for the mini-batches
     #train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=True, shuffle=True)
-    train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=True, shuffle=False)
+    train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=True, shuffle=True)
     valid_iter = chainer.iterators.SerialIterator(group_set_validation, 256, repeat=False, shuffle=True)
 
 

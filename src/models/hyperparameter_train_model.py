@@ -112,7 +112,7 @@ def main(gpu, epochs, repeat_program):
 
     """ Begin training """
     model_suffix_dir = "{0}-{1}-{2}".format(time.strftime("%Y%m%d-%H%M%S"), 'with_peephole' if base_parameters["peephole"] == 1 else 'no_peephole', "hyperparameter-trainer")
-    output_path = base_parameters["output_dir"] + "/" + model_suffix_dir
+    output_path = base_parameters["output_dir"] + "/hyperparameters/" + model_suffix_dir
     if not os.path.exists(output_path):
         os.makedirs(output_path)
     trainer.train(output_path, trainer_callback)
