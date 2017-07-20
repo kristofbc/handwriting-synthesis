@@ -15,8 +15,9 @@ from trainer.program import Program
 
 @click.command()
 @click.option('--gpu', type=click.INT, default=-1, help='GPU ID (negative value is CPU).')
-@click.option('--epochs', type=click.INT, default=5, help='Number of epochs to compare')
-def main(gpu, epochs):
+@click.option('--epochs', type=click.INT, default=50, help='Number of epochs to compare')
+@click.option('--repeat_program', type=click.INT, default=5, help='Mitigate the stochasticity by repeating each program n times.')
+def main(gpu, epochs, repeat_program):
     """ Hyperparameters to test """
     base_parameters = {
         "data_dir": "data/processed/OnlineHandWriting",
@@ -34,15 +35,48 @@ def main(gpu, epochs):
     }
 
     """ Test 20 combinations """
-    hyperparameters = []
-    for i in xrange(20):
-        # Alternate parameters
-        combination = [
-            {"batch_size": (50+14*(i-i%2)), "truncated_back_prop_len": (50+25*(i-(i+1)%2)), "truncated_data_samples": 500, "rnn_layers_number": 3, "rnn_cells_number": 400, "win_unit_number": 10, "mix_com_number": 20},
-            {"train_loss_mean": [">=", 0], "valid_loss_mean": [">=", 0]}
+    # Truncated_data_samples should start at 500 but truncated_data_samples%truncated_back_prop_len = 0
+    parameters = [
+        [
+            {"batch_size": 64, "truncated_back_prop_len": 50, "truncated_data_samples": 500, "rnn_layers_number": 3, "rnn_cells_number": 400, "win_unit_number": 10, "mix_com_number": 20},
+            {"train_loss_mean": ["<=", -800], "valid_loss_mean": ["<=", -1000]}
+        ],
+        [
+            {"batch_size": 128, "truncated_back_prop_len": 50, "truncated_data_samples": 500, "rnn_layers_number": 3, "rnn_cells_number": 400, "win_unit_number": 10, "mix_com_number": 20},
+            {"train_loss_mean": ["<=", -800], "valid_loss_mean": ["<=", -1000]}
+        ],
+        [
+            {"batch_size": 64, "truncated_back_prop_len": 75, "truncated_data_samples": 525, "rnn_layers_number": 3, "rnn_cells_number": 400, "win_unit_number": 10, "mix_com_number": 20},
+            {"train_loss_mean": ["<=", -800], "valid_loss_mean": ["<=", -1000]}
+        ],
+        [
+            {"batch_size": 128, "truncated_back_prop_len": 75, "truncated_data_samples": 525, "rnn_layers_number": 3, "rnn_cells_number": 400, "win_unit_number": 10, "mix_com_number": 20},
+            {"train_loss_mean": ["<=", -800], "valid_loss_mean": ["<=", -1000]}
+        ],
+        [
+            {"batch_size": 64, "truncated_back_prop_len": 100, "truncated_data_samples": 500, "rnn_layers_number": 3, "rnn_cells_number": 400, "win_unit_number": 10, "mix_com_number": 20},
+            {"train_loss_mean": ["<=", -800], "valid_loss_mean": ["<=", -1000]}
+        ],
+        [
+            {"batch_size": 128, "truncated_back_prop_len": 100, "truncated_data_samples": 500, "rnn_layers_number": 3, "rnn_cells_number": 400, "win_unit_number": 10, "mix_com_number": 20},
+            {"train_loss_mean": ["<=", -800], "valid_loss_mean": ["<=", -1000]}
         ]
+    ]
+    hyperparameters = []
+    # To mitigate stochasticity run each Program n times
+    for i in xrange(len(parameters)):
+        for j in xrange(repeat_program):
+            hyperparameters.append(parameters[i])
 
-        hyperparameters.append(combination)
+    #for i in xrange(20):
+    #    # Alternate parameters
+    #    bprop_len = (50+25*(i-(i+1)%2))
+    #    combination = [
+    #        {"batch_size": (50+14*(i-i%2)), "truncated_back_prop_len": prop_len, "truncated_data_samples": 500, "rnn_layers_number": 3, "rnn_cells_number": 400, "win_unit_number": 10, "mix_com_number": 20},
+    #        {"train_loss_mean": [">=", 0], "valid_loss_mean": [">=", 0]}
+    #    ]
+
+    #    hyperparameters.append(combination)
 
     """ Training Curriculum for the hyperparameters """
     curriculum = Curriculum()

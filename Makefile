@@ -1,4 +1,4 @@
-.PHONY: clean data lint requirements sync_data_to_s3 sync_data_from_s3
+.PHONY: clean data lint requirements sync_data_to_s3 sync_data_from_s3 train predict visualize
 
 #################################################################################
 # GLOBALS                                                                       #
@@ -78,6 +78,8 @@ train:
 predict:
 	python src/models/predict_model.py ${MODEL_DIR} ${MODEL_NAME} ${TEXT} ${ARGS}
 
+visualize:
+	python src/visualization/visualize.py ${MODEL_NAME}
 
 #################################################################################
 # Self Documenting Commands                                                     #
