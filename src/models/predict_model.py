@@ -212,6 +212,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
     # Compile the results
     losses_network_cpu = chainer.cuda.to_cpu(xp.copy(loss_network))
 
+    """ Generate the handwriting sequence """
     # @TODO: must fetch the stats dynamically
     # Must "un-normalize" the generated strokes
     strokes[:, 1] *= stats[3]
@@ -223,13 +224,12 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
     plt.figure(1)
     strokes = xp.concatenate((strokes, xp.asarray([[0.0, 0.0, 1.0]])))
     for i in xrange(len(text)):
+        logger.info("Generating the handwriting sequence for '{}'".format(text[i]))
         plt.subplot("{0}{1}{2}".format(len(text), 1, i+1))
-        plt.title(text)
+        plt.title(text[i])
         draw_from_strokes(strokes, plt)
-        plt.show()
-
-    print(cs_data)
-    exit()
+        #plt.show()
+        plt.savefig(path + "/" + text[i].replace(" ", "-") + ".png")
 
 
 # ===============
