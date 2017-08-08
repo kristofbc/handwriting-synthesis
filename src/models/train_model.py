@@ -19,9 +19,13 @@ import chainer.functions as F
 from chainer import variable
 
 from net.lstm import LSTM
-from net.adaptive_weight_noise import AdaptiveWeightNoise
+#from net.adaptive_weight_noise import AdaptiveWeightNoise
 from net.soft_window import SoftWindow
 from net.mixture_density_outputs import MixtureDensityOutputs
+
+from net.functions.adaptive_weight_noise import adaptive_weight_noise
+from net.functions.soft_window import soft_window
+from net.functions.mixture_density_outputs import mixture_density_outputs
 
 INPUT_SIZE = 3 # (x, y, end_of_stroke)
 
@@ -64,313 +68,198 @@ def get_padded_data(train_data, train_characters, padding=True):
     
     return np.asarray(tmp1), np.asarray(tmp2)
 
+# ================
+# Functions (fcts)
+# ================
+
+# ============
+# Links (lnks)
+# ============
+class AdaptiveWeightNoise(link.Link):
+    def __init__(self, in_size, out_size, weight_scale=1, no_bias=False, use_weight_noise=True):
+        super(AdaptiveWeightNoise, self).__init__()
+
+        with self.init_scope():
+            if no_bias:
+                M = np.random.normal(0, weight_scale, (out_size*in_size)).astype(np.float32)
+            else:
+                M = np.random.normal(0, weight_scale, (out_size*(in_size-1))).astype(np.float32)
+                M = M.reshape((1, out_size*(in_size-1)))
+                M = np.c_[M, np.zeros((1, out_size)).astype(np.float32)]
+                M = M.reshape(out_size*in_size)
+
+            self.M = chainer.Parameter(M)
+            self.logS2 = chainer.Parameter(np.log((np.ones((out_size*in_size))*1e-8).astype(numpy.float32)))
+
+        self.in_size  = in_size
+        self.out_size = out_size
+        self.no_bias = no_bias
+        self.use_weight_noise = use_weight_noise
+    
+    def __call__(self, batch_size):
+        """
+            Called the Alex Grave Adaptive Weight Noise
+
+            Args:
+                batch_size  (~chainer.Variable): 
+                    (batch size) * (number of truncated backward gradient calculation for a training dataset)
+
+            Returns:
+                ~chainer.Variable: Output of the linear layer.
+
+        """
+        
+        self.fWb, loss = adaptive_weight_noise(batchs_ize, self.M, self.logS2, self.use_weight_noise) 
+        
+        if self.no_bias:
+            return F.reshape(self.fWb, (self.out_size, self.in_size)), loss
+        else:
+            self.fW, self.fb = F.split_axis(self.fWb, np.asarray([(self.in_size -1)*self.out_size]), axis=0)
+            return F.reshape(self.fW, (self.out_size, self.in_size -1)), self.fb, loss
+
+class SoftWindow(link.Link):
+    """
+        SoftWindow layer.
+        This is a SoftWindow layer as a chain. 
+        This is a link that wraps the :func:`~chainer.functions.mixturedensityoutputs` function,
+        and holds a weight matrix ``W`` and optionally a bias vector ``b`` as parameters.
+
+        Args:
+            mix_size (int): number of mixture components.
+    """
+    
+    def __init__(self, mix_size):
+        super(SoftWindow, self).__init__()
+
+        self.mix_size=mix_size
+        self.reset_state()
+        
+    def reset_state(self):
+        self.k_prev = None
+            
+    def __call__(self, cs, ls, h, W, b):
+        """
+            cs   :   one-hot-encoding of a length U character sequence 
+            h    :   input vector (summation of affine transformation of outputs from hidden layers)
+        """
+        y = F.linear(h, W, b)
+        
+        a_hat, b_hat, k_hat =  F.split_axis(y, np.asarray([self.mix_size, 2*self.mix_size]), axis=1) 
+        
+        if self.k_prev is None:
+            self.k_prev = variable.Variable(self.xp.zeros_like(k_hat.data), volatile='auto')
+            
+        self.ws, self.k_prev, self.eow = soft_window(cs, ls, a_hat, b_hat, k_hat, self.k_prev)
+        return self.ws, self.eow
+
+class MixtureDensityOutput(link.Link):
+    """
+        Mixture-Density-Outputs layer.
+
+        This is a Mixture-Density-Outputs layer as a chain. 
+        This is a link that wraps the :func:`~chainer.functions.mixturedensityoutputs` function,
+        and holds a weight matrix ``W`` and optionally a bias vector ``b`` as parameters.
+    
+        Args:
+            mix_size (int): number of mixture components.
+    """
+    
+    def __init__(self, mix_size):
+        super(MixtureDensityOutputs, self).__init__()
+
+        self.loss=None
+        self.mix_size=mix_size
+    
+    def __call__(self, xnext, eow, h1, h2, h3, W1, W2, W3, b1, b2, b3, prob_bias):
+        """
+            xnext   :   next state of a pen. ndim=(batchsize,3)
+            h       :   input vector 
+            W1, W2, W3: (h.shape[1], 1 + mix_size * 6)
+            b1, b2, b3: (1, 1 + mix_size * 6)
+            prob_bias:  probability bias
+        """
+        
+        y  = F.linear(h1, W1, b1)
+        y += F.linear(h2, W2, b2)
+        y += F.linear(h3, W3, b3) 
+        
+        eos_hat, pi_hat, mu1_hat, mu2_hat, sg1_hat, sg2_hat, rho_hat = F.split_axis(
+                y,
+                np.asarray([1, 1+self.mix_size, 1+2*self.mix_size, 
+                            1+3*self.mix_size, 1+4*self.mix_size, 1+5*self.mix_size]), axis=1)
+        
+        self.loss, self.xpred, self.eos, self.pi_, self.mux, self.muy, self.sgx, self.sgy, self.rho = mixture_density_outputs(
+                            xnext, eow, eos_hat, pi_hat * (1. + prob_bias), mu1_hat, mu2_hat, sg1_hat - prob_bias, sg2_hat - prob_bias, rho_hat) 
+        
+        return self.loss, self.xpred, self.eos, self.pi_, self.mux, self.muy, self.sgx, self.sgy, self.rho
+        
+        
+
+# =============
+# Models (mdls)
+# =============
+
+
+
 class Model(chainer.Chain):
     """
-    Handwriting Synthesis Network Model. No peephole
-
-    Args:
-        n_vocab:
+        Handwriting Synthesis Model
     """
-    def __init__(self, n_vocab, input_size, n_win_units, n_rnn_cells, n_mix_comp, n_rnn_layers, wscale=0.1, use_weight_noise=True):
-        super(Model, self).__init__(
-            awn_x_l1  = AdaptiveWeightNoise((3+1), 4*n_rnn_cells, wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_x_l2  = AdaptiveWeightNoise((3+1), 4*n_rnn_cells, wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_x_l3  = AdaptiveWeightNoise((3+1), 4*n_rnn_cells, wscale, nobias=False, use_weight_noise=use_weight_noise),
+    def __init__(self, n_chars, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number, weight_scale=0.1, use_weight_noise=1):
+        super(Model, self).__init__()
 
-            awn_l1_ws = AdaptiveWeightNoise((n_rnn_cells+1),(3*n_win_units), wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_ws_l1 = AdaptiveWeightNoise((n_vocab + 1), (4*n_rnn_cells), wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_ws_l2 = AdaptiveWeightNoise((n_vocab + 1), (4*n_rnn_cells), wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_ws_l3 = AdaptiveWeightNoise((n_vocab + 1), (4*n_rnn_cells), wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_l1_l1 = AdaptiveWeightNoise((n_rnn_cells + 1), (4*n_rnn_cells), wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_l2_l2 = AdaptiveWeightNoise((n_rnn_cells + 1), (4*n_rnn_cells), wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_l3_l3 = AdaptiveWeightNoise((n_rnn_cells + 1), (4*n_rnn_cells), wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_l1_l2 = AdaptiveWeightNoise((n_rnn_cells + 1), (4*n_rnn_cells), wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_l2_l3 = AdaptiveWeightNoise((n_rnn_cells + 1), (4*n_rnn_cells), wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_l1_ms = AdaptiveWeightNoise((n_rnn_cells + 1), (1 + n_mix_comp*6), wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_l2_ms = AdaptiveWeightNoise((n_rnn_cells + 1), (1 + n_mix_comp*6), wscale, nobias=False, use_weight_noise=use_weight_noise),
-            awn_l3_ms = AdaptiveWeightNoise((n_rnn_cells + 1), (1 + n_mix_comp*6), wscale, nobias=False, use_weight_noise=use_weight_noise),
-            
-            ws=SoftWindow(n_win_units),
-            l1=LSTM(n_rnn_cells),
-            l2=LSTM(n_rnn_cells),
-            l3=LSTM(n_rnn_cells),
-            ms=MixtureDensityOutputs(n_mix_comp) 
-        )
-        #self.train = train
-        self.n_rnn_cells = n_rnn_cells
-        self.n_win_units = n_win_units
-        self.n_mix_comp  = n_mix_comp
-        self.n_vocab = n_vocab
+        with self.init_scope():
+           self.awn_x_l1 = AdaptiveWeightNoise((3+1), 4*rnn_cells_number, weight_scale, no_bias=False)
+           self.awn_x_l2 = AdaptiveWeightNoise((3+1), 4*rnn_cells_number, weight_scale, no_bias=False)
+           self.awn_x_l3 = AdaptiveWeightNoise((3+1), 4*rnn_cells_number, weight_scale, no_bias=False)
+
+           self.awn_l1_ws = AdaptiveWeightNoise((rnn_cells_number+1), (3*win_unit_number), weight_scale, no_bias=False)
+
+           self.awn_ws_l1 = AdaptiveWeightNoise((n_vocab+1), (4*rnn_cells_number), weight_scale, no_bias=False)
+           self.awn_ws_l2 = AdaptiveWeightNoise((n_vocab+1), (4*rnn_cells_number), weight_scale, no_bias=False)
+           self.awn_ws_l3 = AdaptiveWeightNoise((n_vocab+1), (4*rnn_cells_number), weight_scale, no_bias=False)
+
+           self.awn_l1_l1 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False)
+           self.awn_l2_l2 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False)
+           self.awn_l3_l3 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False)
+           self.awn_l1_l2 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False)
+           self.awn_l2_l3 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False)
+
+           self.awn_l1_ms = AdaptiveWeightNoise((rnn_cells_number+1), (1+mix_comp_number*6), weight_scale, no_bias=False)
+           self.awn_l2_ms = AdaptiveWeightNoise((rnn_cells_number+1), (1+mix_comp_number*6), weight_scale, no_bias=False)
+           self.awn_l3_ms = AdaptiveWeightNoise((rnn_cells_number+1), (1+mix_comp_number*6), weight_scale, no_bias=False)
+
+           self.ws = SoftWindow(win_unit_number)
+
+           self.l1 = L.LSTM(rnn_cells_number)
+           self.l2 = L.LSTM(rnn_cells_number)
+           self.l3 = L.LSTM(rnn_cells_number)
+
+           self.ms = MixtureDensityOutputs(mix_comp_number)
+
+        self.win_unit_number = win_unit_number
+        self.rnn_cells_number = rnn_layers_number
+        self.mix_comp_number = mix_comp_number
+        self.n_chars = n_chars
+
         self.reset_state()
-        
+
     def reset_state(self):
         self.ws.reset_state()
         self.l1.reset_state()
         self.l2.reset_state()
         self.l3.reset_state()
-        self.wo = None          # output from 'soft window', ws
+
+        self.ws_output = None
         self.ws_to_l1 = None
         self.loss_complex = None
-    """    
-    def get_weights_for_testing(self):
-        fW, b = split_axis.split_axis(self.M, numpy.asarray([(self.in_size -1)*self.out_size]), axis=0)
-        W = reshape.reshape(fW, (self.out_size, self.in_size -1))
-        return W, b
-    """
-    def __call__(self, x_now, xnext, cs, ls, prob_bias, n_batches, renew_weights, testing=False):
-        xp = cuda.get_array_module(*x_now.data)
+
+    def __call__(self, x, renew_weights=True, adaptive_noise = True):
+        x_now, x_next, cs, ls, prob_bias, n_batches = x
+        testing = not chainer.config.train
+
+        # @TODO: Complete implementation. WAY OF CALLING THE MODEL SHOULD BE CHANGED FOR SINGLE INPUT.
         
-        if renew_weights:
-            
-            if testing:
-                # Generate weights w/o Adaptive Noises
-                def get_weights_for_testing(self):
-                    fW, b = F.split_axis(self.M, np.asarray([(self.in_size -1)*self.out_size]), axis=0)
-                    W = F.reshape(fW, (self.out_size, self.in_size -1))
-                    return W, b
-        
-                self.w_x_l1, self.b_x_l1    = get_weights_for_testing(self.awn_x_l1)
-                self.w_x_l2, self.b_x_l2    = get_weights_for_testing(self.awn_x_l2)
-                self.w_x_l3, self.b_x_l3    = get_weights_for_testing(self.awn_x_l3)
-                self.w_l1_ws, self.b_l1_ws  = get_weights_for_testing(self.awn_l1_ws)
-                self.w_ws_l1, self.b_ws_l1  = get_weights_for_testing(self.awn_ws_l1)
-                self.w_ws_l2, self.b_ws_l2  = get_weights_for_testing(self.awn_ws_l2)
-                self.w_ws_l3, self.b_ws_l3  = get_weights_for_testing(self.awn_ws_l3)
-                self.w_l1_l1, self.b_l1_l1  = get_weights_for_testing(self.awn_l1_l1)
-                self.w_l2_l2, self.b_l2_l2  = get_weights_for_testing(self.awn_l2_l2)
-                self.w_l3_l3, self.b_l3_l3  = get_weights_for_testing(self.awn_l3_l3)
-                self.w_l1_l2, self.b_l1_l2  = get_weights_for_testing(self.awn_l1_l2)
-                self.w_l2_l3, self.b_l2_l3  = get_weights_for_testing(self.awn_l2_l3)
-                self.w_l1_ms, self.b_l1_ms  = get_weights_for_testing(self.awn_l1_ms)
-                self.w_l2_ms, self.b_l2_ms  = get_weights_for_testing(self.awn_l2_ms)
-                self.w_l3_ms, self.b_l3_ms  = get_weights_for_testing(self.awn_l3_ms)
-            
-            else:
-                # Generate weights w/ Adaptive Noises
-                self.w_x_l1, self.b_x_l1, loss_ = self.awn_x_l1(n_batches)
-                self.loss_complex = F.reshape(loss_, (1,1))
-                
-                self.w_x_l2, self.b_x_l2, loss_ = self.awn_x_l2(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_x_l3, self.b_x_l3, loss_ = self.awn_x_l3(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_l1_ws, self.b_l1_ws, loss_ = self.awn_l1_ws(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_ws_l1, self.b_ws_l1, loss_ = self.awn_ws_l1(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_ws_l2, self.b_ws_l2, loss_ = self.awn_ws_l2(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_ws_l3, self.b_ws_l3, loss_ = self.awn_ws_l3(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_l1_l1, self.b_l1_l1, loss_  = self.awn_l1_l1(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_l2_l2, self.b_l2_l2, loss_ = self.awn_l2_l2(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_l3_l3, self.b_l3_l3, loss_ = self.awn_l3_l3(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_l1_l2, self.b_l1_l2, loss_ = self.awn_l1_l2(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_l2_l3, self.b_l2_l3, loss_ = self.awn_l2_l3(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_l1_ms, self.b_l1_ms, loss_  = self.awn_l1_ms(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_l2_ms, self.b_l2_ms, loss_  = self.awn_l2_ms(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-                
-                self.w_l3_ms, self.b_l3_ms, loss_  = self.awn_l3_ms(n_batches)
-                self.loss_complex = F.concat((self.loss_complex, F.reshape(loss_, (1,1))))
-            
-        # xs(t)   --> l1(t)
-        l1_in = F.linear(x_now, self.w_x_l1, self.b_x_l1)
-        # xs(t)   --> l2(t)
-        l2_in = F.linear(x_now, self.w_x_l2, self.b_x_l2)
-        # xs(t)   --> l3(t)
-        l3_in = F.linear(x_now, self.w_x_l3, self.b_x_l3)
-        
-        
-        # LSTM1
-        if self.wo is not None:
-            # ws(t-1) --> l1(t)
-            l1_in +=  self.ws_to_l1
-        # h1 <-- LSTM(l1_in)
-        h1 = self.l1(l1_in, self.w_l1_l1, self.b_l1_l1)  
-        
-        # SoftWindow       cs, h1(t) --> ws(t), eow(t)
-        self.wo, self.eow  = self.ws(cs, ls, h1, self.w_l1_ws, self.b_l1_ws)
-        self.ws_to_l1 = F.linear(self.wo, self.w_ws_l1, self.b_ws_l1)
-        self.ws_to_l2 = F.linear(self.wo, self.w_ws_l2, self.b_ws_l2)
-        self.ws_to_l3 = F.linear(self.wo, self.w_ws_l3, self.b_ws_l3)
-        
-        # LSTM2
-        l2_in   += F.linear(h1, self.w_l1_l2, self.b_l1_l2)
-        l2_in   += self.ws_to_l2
-        h2       = self.l2(l2_in, self.w_l2_l2, self.b_l2_l2)
-        
-        # LSTM3
-        l3_in   += F.linear(h2, self.w_l2_l3, self.b_l2_l3)
-        l3_in   += self.ws_to_l3
-        h3       = self.l3(l3_in, self.w_l3_l3, self.b_l3_l3)
-        
-        #self.eow = chainer.Variable(xp.zeros_like(xnext.data).astype(xp.float32), volatile='auto')
-        # Mixture Density Network
-        loss_network, xpred, eos_, pi_, mux_, muy_, sgx_, sgy_, rho_  = self.ms(
-            xnext, 
-            self.eow, 
-            h1, h2, h3, 
-            self.w_l1_ms, 
-            self.w_l2_ms,
-            self.w_l3_ms,
-            self.b_l1_ms, 
-            self.b_l2_ms,
-            self.b_l3_ms,
-            prob_bias
-        )
-        
-        return loss_network, xpred, eos_, pi_, mux_, muy_, sgx_, sgy_, rho_ , self.loss_complex
-
-class ModelPeephole(chainer.Chain):
-    """
-    Handwriting Synthesis Network Model. No peephole
-
-    xs: (Variable) state of a pen position
-    cs: (Variable) one-hot-encoded vector of a given set of character sequences.
-    ndim=(batchsize, n_chars, max_sequence_length)
-    lstm1, lstm2, lstm3: (Chain) lstm+peephole layer
-    ws: (Chain) soft window for alignment
-    ms: (Chain) mixture density outputs
-    loss: (Variable)
-    """
-    def __init__(self, n_vocab, input_size, n_win_units, n_rnn_cells, n_mix_comp):
-        super(ModelPeephole, self).__init__(
-            awn=AdaptiveWeightNoise( 
-                (3 + 1)            *(3*4*n_rnn_cells) + \
-                (n_rnn_cells+1)          *n_win_units + \
-                (n_vocab + 1)      *(3*4*n_rnn_cells) + \
-                (3*n_rnn_cells)      *(4*n_rnn_cells) + \
-                3                    *(3*n_rnn_cells) + \
-                (2*n_rnn_cells + 2)  *(4*n_rnn_cells) + \
-                3*(n_rnn_cells + 1)*(1 + n_mix_comp*6)     # (l1, l2, l3) --> ms
-            ),
-            ws=SoftWindow(n_win_units),
-            l1=LSTMpeephole(n_rnn_cells),       # LSTM as l1
-            l2=LSTMpeephole(n_rnn_cells),       # LSTM as l2
-            l3=LSTMpeephole(n_rnn_cells),       # LSTM as l3
-            ms=MixtureDensityOutputs3(n_mix_comp) 
-        )
-        #self.train = train
-        self.n_rnn_cells = n_rnn_cells
-        self.reset_state()
-        self.split_sections = numpy.cumsum(
-            numpy.asarray(
-                [3            *3*4*n_rnn_cells,       # fw_x_ls
-                 1            *3*4*n_rnn_cells,       # fb_x_ls
-                 n_rnn_cells      *n_win_units,       # fw_l1_ws
-                 1      *n_win_units,       # fb_l1_ws
-                 n_vocab      *3*4*n_rnn_cells,       # fw_ws_ls
-                 1      *3*4*n_rnn_cells,       # fb_ws_ls
-                 n_rnn_cells    *4*n_rnn_cells,       # fw_l1_l1
-                 n_rnn_cells    *4*n_rnn_cells,       # fw_l2_l2
-                 n_rnn_cells    *4*n_rnn_cells,       # fw_l3_l3
-                 n_rnn_cells    *4*n_rnn_cells,       # fw_l1_l2
-                 1    *4*n_rnn_cells,       # fb_l1_l2
-                 n_rnn_cells    *4*n_rnn_cells,       # fw_l2_l3
-                 1    *4*n_rnn_cells,       # fb_l2_l3
-                 (n_rnn_cells)  *(1 + n_mix_comp*6),  # fw_l1_ms
-                 1  *(1 + n_mix_comp*6),  # fb_l1_ms
-                 (n_rnn_cells)  *(1 + n_mix_comp*6),  # fw_l2_ms
-                 1  *(1 + n_mix_comp*6),  # fb_l2_ms
-                 (n_rnn_cells)  *(1 + n_mix_comp*6),  # fw_l3_ms
-                 1  *(1 + n_mix_comp*6),  # fb_l3_ms
-                 1  *3*n_rnn_cells,       # fw_l1_peephole
-                 1  *3*n_rnn_cells,       # fw_l2_peephole
-                 1  *3*n_rnn_cells         # fw_l3_peephole
-                ]
-            )
-        )
-
-    def reset_state(self):
-        self.ws.reset_state()
-        self.l1.reset_state()
-        self.l2.reset_state()
-        self.l3.reset_state()
-        self.wo = None          # output from 'soft window', ws
-        self.ws_to_l1 = None
-
-    def __call__(self, x_now, xnext, cs, ls, prob_bias, batch_size, enoise):
-
-        n_batches = variable.Variable(xp.asarray([batch_size], dtype=x_now.data.dtype), volatile='auto')
-        n_rnn_cells = self.n_rnn_cells
-
-        # Adaptive weight noise
-        fW, loss_complex = self.awn(enoise, n_batches)
-
-        fw_x_ls, fb_x_ls,   \
-                fw_l1_ws, fb_l1_ws, \
-                fw_ws_ls, fb_ws_ls, \
-                fw_l1_l1, fw_l2_l2, fw_l3_l3, \
-                fw_l1_l2, fb_l1_l2, \
-                fw_l2_l3, fb_l2_l3, \
-                fw_l1_ms, fb_l1_ms, \
-                fw_l2_ms, fb_l2_ms, \
-                fw_l2_ms, fb_l2_ms, \
-                fw_l1_peephole,     \
-                fw_l2_peephole,     \
-                fw_l3_peephole      \
-                = F.split_axis(fW, self.split_sections[0:-1], axis=0)
-
-        # xs(t)   --> l1(t), l2(t), l3(t)
-        y_x = F.linear(x_now, F.reshape(fw_x_ls, (3, 3*4*n_rnn_cells)), F.reshape(fb_x_ls, (1, 3*4*n_rnn_cells)))
-        l1_in, l2_in, l3_in = F.split_axis(y_x, numpy.asarray([4*n_rnn_cells, 8*n_rnn_cells]), axis=1)
-
-        # LSTM1
-        if self.wo is not None:
-            l1_in +=  self.ws_to_l1                     # ws(t-1) --> l1(t)
-            h1 = self.l1(l1_in, F.reshape(fw_l1_l1, (n_rnn_cells, 4*n_rnn_cells)), F.reshape(fw_l1_peephole, (1, 3*n_rnn_cells)))
-
-        # SoftWindow       cs, h1(t) --> ws(t), eow(t)
-        self.wo, self.eow  = self.ws(cs, ls, h1, F.reshape(fw_l1_ws, (n_vocab, 3*4*n_rnn_cells)), F.reshape(fb_ws_ls, (1, 3*4*n_rnn_cells)))
-        y_w = F.linear(self.wo, F.reshape(fw_ws_ls, (n_vocab, 3*4*n_rnn_cells)), F.reshape(fb_ws_ls, (1, 3*4*n_rnn_cells)))
-
-        self.ws_to_l1, ws_to_l2, ws_to_l3 = F.split_axis(y_w, numpy.asarray([4*n_rnn_cells, 8*n_rnn_cells]), axis=1)
-
-        # LSTM2
-        l2_in   += F.linear(h1, F.reshape(fw_l1_l2, (n_rnn_cells, 4*n_rnn_cells)), F.reshape(fb_l1_l2, (1, 4*n_rnn_cells)))
-        l2_in   += ws_to_l2
-        h2       = self.l2(l2_in, F.reshape(fw_l2_l2, (n_rnn_cells, 4*n_rnn_cells)), F.reshape(fw_l2_peephole, (1, 3*n_rnn_cells)))
-
-        # LSTM3
-        l3_in   += F.linear(h2, F.reshape(fw_l2_l3, (n_rnn_cells, 4*n_rnn_cells)), F.reshape(fb_l2_l3, (1, 4*n_rnn_cells)))
-        l3_in   += ws_to_l3
-        h3       = self.l3(l3_in, F.reshape(fw_l3_l3, (n_rnn_cells, 4*n_rnn_cells)), F.reshape(fw_l3_peephole, (1, 3*n_rnn_cells)))
-
-        # Mixture Density Network
-        loss_network, xpred, eos_, pi_, mux_, muy_, sgx_, sgy_, rho_  = self.ms(
-            xnext, 
-            self.eow, 
-            h1, h2, h3, 
-            F.reshape(fw_l1_ms, (n_rnn_cells, 1 + n_mix_comp*6)), 
-            F.reshape(fw_l2_ms, (n_rnn_cells, 1 + n_mix_comp*6)),
-            F.reshape(fw_l3_ms, (n_rnn_cells, 1 + n_mix_comp*6)),
-            F.reshape(fb_l1_ms, (1,           1 + n_mix_comp*6)), 
-            F.reshape(fb_l2_ms, (1,           1 + n_mix_comp*6)),
-            F.reshape(fb_l3_ms, (1,           1 + n_mix_comp*6)),
-            prob_bias
-        )
-
-        return loss_network, xpred, eos_, pi_, mux_, muy_, sgx_, sgy_, rho_, loss_complex
-
 
 # ===============================================
 # Main entry point of the training process (main)
