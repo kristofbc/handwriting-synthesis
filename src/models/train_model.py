@@ -254,11 +254,130 @@ class Model(chainer.Chain):
         self.ws_to_l1 = None
         self.loss_complex = None
 
+    def get_awn_weight_name(awn_link_name):
+        """
+            Get the link name containing the weight
+
+            Args:
+                awn_link_name (string): name of the awn link corresponding to the weight
+            Returns:
+                (string)
+        """
+        name = awn_link_name[4:] if awn_link_name[:4] == "awn_" or awn_link_name
+        return "awn_" + name + "_weight"
+
+    def get_awn_bias_name(awn_link_name):
+        """
+            Get the link name containing the bias
+
+            Args:
+                awn_link_name (string): name of the awn link corresponding to the bias
+            Returns:
+                (string)
+        """
+        name = awn_link_name[4:] if awn_link_name[:4] == "awn_" or awn_link_name
+        return "awn_" + name + "_bias"
+
+    def get_awn_weight_link(awn_link_name):
+        """
+            Get the link containing the weight
+
+            Args:
+                awn_link_name (string): name of the awn link corresponding to the weight
+            Returns:
+                (link.Link)
+        """
+        name = self.get_awn_weight_name(awn_link_name)
+        if name not in self:
+            raise ValueError("Link {} does not exists in model".format(name))
+        return self[name]
+
+    def get_awn_bias_link(awn_link_name):
+        """
+            Get the link containing the bias
+
+            Args:
+                awn_link_name (string): name of the awn link corresponding to the weight
+            Returns:
+                (link.Link)
+        """
+        name = self.get_awn_bias_name(awn_link_name)
+        if name not in self:
+            raise ValueError("Link {} does not exists in model".format(name))
+        return self[name]
+
+
     def __call__(self, x, renew_weights=True, adaptive_noise = True):
+        """ Unpack and configure the network """
         x_now, x_next, cs, ls, prob_bias, n_batches = x
         testing = not chainer.config.train
 
-        # @TODO: Complete implementation. WAY OF CALLING THE MODEL SHOULD BE CHANGED FOR SINGLE INPUT.
+        # Use CuPY if available
+        xp = cuda.get_array_module(*x_now.data)
+
+        # Generate the weight and bias for adaptive weight noise
+        if renew_weights:
+            for link_name in self.children():
+                if link_name[:2] != "awn":
+                    continue
+                # The weight and bias adds _weight and _bias to the link_name.
+                # E.g: awn_x_l1 => awn_x_l1_weight, awn_x_l1_bias
+                weight_name = self.get_awn_weight_name(link_name)
+                bias_name = self.get_awn_bias_name(link_name)
+                if testing:
+                    # Generate weight without weight noise
+                    fW, b = F.split_axis(self.M, np.array([(self.in_size -1)*self.out_size]), axis=0)
+                    W = F.reshape(fW, (self.out_size, self.in_size-1))
+                    self[weight_name] = W
+                    self[bias_name] = b
+                else:
+                    # Generate weight with weight noise
+                    self[weight_name], self[bias_name], loss = self[link_name](n_batches, adaptive_noise)
+                    if self.loss_complex is None:
+                        self.loss_complex = F.reshape(loss, (1,1))
+                    else:
+                        self.loss_complex = F.concat((self.loss_complex, F.reshape(loss, (1,1))))
+
+        """ Begins the transformations """
+        # Linear
+        l1_in = F.linear(x_now, self.get_awn_weight_link("x_l1"), self.get_awn_bias_link("x_l1"))
+        l2_in = F.linear(x_now, self.get_awn_weight_link("x_l2"), self.get_awn_bias_link("x_l2"))
+        l3_in = F.linear(x_now, self.get_awn_weight_link("x_l3"), self.get_awn_bias_link("x_l3"))
+
+        # LSTM1
+        if self.wo is not None:
+            l1_in += self.ws_to_l1
+        l1_h = self.l1(l1_in, self.get_awn_weight_link("l1_l1"), self.get_awn_bias_link("l1_l1"))
+
+        # SoftWindow
+        self.wo, self.eow = self.ws(cs, ls, l1_h, self.get_awn_weight_link("l1_ws"), self.get_awn_bias_link("l1_ws"))
+        self.ws_to_l1 = F.linear(self.wo, self.get_awn_weight_link("ws_l1"), self.get_awn_bias_link("ws_l1"))
+        self.ws_to_l2 = F.linear(self.wo, self.get_awn_weight_link("ws_l2"), self.get_awn_bias_link("ws_l2"))
+        self.ws_to_l3 = F.linear(self.wo, self.get_awn_weight_link("ws_l3"), self.get_awn_bias_link("ws_l3"))
+
+        # LSTM2
+        l2_in += F.linear(l1_h, self.get_awn_weight_link("l1_l2"), self.get_awn_bias_link("l1_l2"))
+        l2_in += self.ws_to_l2
+        l2_h = self.l2(l2_in, self.get_awn_weight_link("l2_l2"), self.get_awn_bias_link("l2_l2"))
+
+        # LSTM3
+        l3_in += F.linear(l2_h, self.get_awn_weight_link("l2_l3"), self.get_awn_bias_link("l2_l3"))
+        l3_in += self.ws_to_l3
+        l2_h = self.l3(l3_in, self.get_awn_weight_link("l3_l3"), self.get_awn_bias_link("l3_l3"))
+
+        # Mixture Density Network
+        loss_network, x_pred, eos, pi, mux, muy, sgx, sgy, rho = self.ms(
+            x_next, self.eow, l1_h, l2_h, l3_h,
+            self.get_awn_weight_link("l1_ms"),
+            self.get_awn_weight_link("l2_ms"),
+            self.get_awn_weight_link("l3_ms"),
+            self.get_awn_bias_link("l1_ms"),
+            self.get_awn_bias_link("l2_ms"),
+            self.get_awn_bias_link("l3_ms"),
+            prob_bias
+        )
+
+        return loss_network, x_pred, eos, pi, mux, muy, sgx, rho, self.losses_complex
         
 
 # ===============================================
@@ -415,7 +534,9 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                 # The weight are updated only in the first iteration
                 local_update_weight = update_weight if t == 0 else False
 
-                loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, local_update_weight)
+                #loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, local_update_weight)
+                x = [x_now, x_next, cs, ls, prob_bias, n_batches]
+                loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, local_update_weight)
 
                 # Get stats
                 accum_loss += F.sum(loss_i)/offset_batch_size
