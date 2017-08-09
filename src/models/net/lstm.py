@@ -24,7 +24,6 @@ class LSTM(link.Link):
         if self.c is None:
             xp = self.xp
             self.c = variable.Variable(
-                xp.zeros((len(x.data), self.state_size), dtype=x.data.dtype),
-                volatile='auto')
+                xp.zeros((len(x.data), self.state_size), dtype=x.data.dtype))
         self.c, self.h = lstm.lstm(self.c, lstm_in)
         return self.h

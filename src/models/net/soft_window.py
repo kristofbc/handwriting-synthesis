@@ -44,9 +44,7 @@ class SoftWindow(link.Link):
         
         if self.k_prev is None:
             xp = self.xp
-            self.k_prev = variable.Variable(
-                xp.zeros_like(k_hat.data),
-                volatile='auto')
+            self.k_prev = variable.Variable(xp.zeros_like(k_hat.data))
             
         self.ws, self.k_prev, self.eow = soft_window(cs, ls, a_hat, b_hat, k_hat, self.k_prev)
         return self.ws, self.eow
