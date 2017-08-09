@@ -98,7 +98,8 @@ class MixtureDensityOutputs(function.Function):
 
             x_type.shape[0] == e_type.shape[0],
         )
-        for i in range(2, x_type.ndim.eval()):
+        
+        for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(e_type.shape[i] == x_type.shape[i])
         
         type_check.expect(
@@ -110,7 +111,7 @@ class MixtureDensityOutputs(function.Function):
 
             x_type.shape[0] == pi_type.shape[0],
         )
-        for i in range(2, x_type.ndim.eval()):
+        for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(pi_type.shape[i] == x_type.shape[i])
             
         type_check.expect(
@@ -122,7 +123,7 @@ class MixtureDensityOutputs(function.Function):
             
             x_type.shape[0] == mux_type.shape[0],
         )
-        for i in range(2, x_type.ndim.eval()):
+        for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(mux_type.shape[i] == x_type.shape[i])
         
         type_check.expect(
@@ -134,7 +135,7 @@ class MixtureDensityOutputs(function.Function):
             
             x_type.shape[0] == muy_type.shape[0],
         )
-        for i in range(2, x_type.ndim.eval()):
+        for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(muy_type.shape[i] == x_type.shape[i])
         
         type_check.expect(
@@ -146,7 +147,7 @@ class MixtureDensityOutputs(function.Function):
             
             x_type.shape[0] == sgmx_type.shape[0],
         )
-        for i in range(2, x_type.ndim.eval()):
+        for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(sgmx_type.shape[i] == x_type.shape[i])
         
         type_check.expect(
@@ -158,7 +159,7 @@ class MixtureDensityOutputs(function.Function):
             
             x_type.shape[0] == sgmy_type.shape[0],
         )
-        for i in range(2, x_type.ndim.eval()):
+        for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(sgmy_type.shape[i] == x_type.shape[i])
             
         type_check.expect(
@@ -170,7 +171,7 @@ class MixtureDensityOutputs(function.Function):
             
             x_type.shape[0] == rho_type.shape[0],
         )
-        for i in range(2, x_type.ndim.eval()):
+        for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(rho_type.shape[i] == x_type.shape[i])
             
         type_check.expect(
@@ -182,7 +183,7 @@ class MixtureDensityOutputs(function.Function):
 
             pi_type.shape[1] == mux_type.shape[1],
         )
-        for i in range(2, pi_type.ndim.eval()):
+        for i in range(2, type_check.eval(pi_type.ndim)):
             type_check.expect(mux_type.shape[i] == pi_type.shape[i])
         
         type_check.expect(
@@ -194,7 +195,7 @@ class MixtureDensityOutputs(function.Function):
 
             pi_type.shape[1] == muy_type.shape[1],
         )
-        for i in range(2, pi_type.ndim.eval()):
+        for i in range(2, type_check.eval(pi_type.ndim)):
             type_check.expect(muy_type.shape[i] == pi_type.shape[i])
         
         type_check.expect(
@@ -206,7 +207,7 @@ class MixtureDensityOutputs(function.Function):
 
             pi_type.shape[1] == sgmx_type.shape[1],
         )
-        for i in range(2, pi_type.ndim.eval()):
+        for i in range(2, type_check.eval(pi_type.ndim)):
             type_check.expect(sgmx_type.shape[i] == pi_type.shape[i])
         
         type_check.expect(
@@ -218,7 +219,7 @@ class MixtureDensityOutputs(function.Function):
 
             pi_type.shape[1] == sgmy_type.shape[1],
         )
-        for i in range(2, pi_type.ndim.eval()):
+        for i in range(2, type_check.eval(pi_type.ndim)):
             type_check.expect(sgmy_type.shape[i] == pi_type.shape[i])
         
         type_check.expect(
@@ -230,7 +231,7 @@ class MixtureDensityOutputs(function.Function):
 
             pi_type.shape[1] == rho_type.shape[1],
         )
-        for i in range(2, pi_type.ndim.eval()):
+        for i in range(2, type_check.eval(pi_type.ndim)):
             type_check.expect(rho_type.shape[i] == pi_type.shape[i])
                     
     def forward(self, inputs):
