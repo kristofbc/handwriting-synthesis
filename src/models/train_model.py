@@ -12,11 +12,18 @@ import math
 import numpy as np
 import cPickle as pickle
 
+try:
+    import cupy
+except:
+    cupy = np
+    pass
+
 import chainer
 from chainer import cuda
 import chainer.links as L
 import chainer.functions as F
 from chainer import variable
+from chainer import link
 
 from net.lstm import LSTM
 #from net.adaptive_weight_noise import AdaptiveWeightNoise
@@ -89,7 +96,7 @@ class AdaptiveWeightNoise(link.Link):
                 M = M.reshape(out_size*in_size)
 
             self.M = chainer.Parameter(M)
-            self.logS2 = chainer.Parameter(np.log((np.ones((out_size*in_size))*1e-8).astype(numpy.float32)))
+            self.logS2 = chainer.Parameter(np.log((np.ones((out_size*in_size))*1e-8).astype(np.float32)))
 
         self.in_size  = in_size
         self.out_size = out_size
@@ -109,7 +116,7 @@ class AdaptiveWeightNoise(link.Link):
 
         """
         
-        self.fWb, loss = adaptive_weight_noise(batchs_ize, self.M, self.logS2, self.use_weight_noise) 
+        self.fWb, loss = adaptive_weight_noise(batch_size, self.M, self.logS2, self.use_weight_noise) 
         
         if self.no_bias:
             return F.reshape(self.fWb, (self.out_size, self.in_size)), loss
@@ -147,7 +154,8 @@ class SoftWindow(link.Link):
         a_hat, b_hat, k_hat =  F.split_axis(y, np.asarray([self.mix_size, 2*self.mix_size]), axis=1) 
         
         if self.k_prev is None:
-            self.k_prev = variable.Variable(self.xp.zeros_like(k_hat.data), volatile='auto')
+            with chainer.no_backprop_mode():
+                self.k_prev = variable.Variable(self.xp.zeros_like(k_hat.data))
             
         self.ws, self.k_prev, self.eow = soft_window(cs, ls, a_hat, b_hat, k_hat, self.k_prev)
         return self.ws, self.eow
@@ -193,47 +201,71 @@ class MixtureDensityOutput(link.Link):
         
         return self.loss, self.xpred, self.eos, self.pi_, self.mux, self.muy, self.sgx, self.sgy, self.rho
         
+
+class LSTM(link.Link):
+    """
+        LSTM
+        A wrapper around the cell states
+
+        Args:
+            out_size (int): number of cells inside the LSTM
+    """
+    def __init__(self, out_size):
+        super(LSTM, self).__init__()
+        self.state_size = out_size
+        self.reset_state()
+
+    def reset_state(self):
+        self.c = self.h = None
+
+    def __call__(self, x, W_lateral, b_lateral):
+        lstm_in = x
+        if self.h is not None:
+            lstm_in += F.linear(self.h, W_lateral, b_lateral)
+        if self.c is None:
+            xp = self.xp
+            self.c = variable.Variable(xp.zeros((len(x.data), self.state_size), dtype=x.data.dtype))
+        self.c, self.h = F.lstm(self.c, lstm_in)
+        return self.h
         
 
 # =============
 # Models (mdls)
 # =============
 
-
-
 class Model(chainer.Chain):
     """
         Handwriting Synthesis Model
     """
-    def __init__(self, n_chars, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number, weight_scale=0.1, use_weight_noise=1):
+    def __init__(self, n_chars, input_size, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number, weight_scale=0.1, use_adaptive_noise=True):
         super(Model, self).__init__()
 
         with self.init_scope():
-           self.awn_x_l1 = AdaptiveWeightNoise((3+1), 4*rnn_cells_number, weight_scale, no_bias=False)
-           self.awn_x_l2 = AdaptiveWeightNoise((3+1), 4*rnn_cells_number, weight_scale, no_bias=False)
-           self.awn_x_l3 = AdaptiveWeightNoise((3+1), 4*rnn_cells_number, weight_scale, no_bias=False)
+           self.awn_x_l1 = AdaptiveWeightNoise((input_size+1), 4*rnn_cells_number, weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+           self.awn_x_l2 = AdaptiveWeightNoise((input_size+1), 4*rnn_cells_number, weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+           self.awn_x_l3 = AdaptiveWeightNoise((input_size+1), 4*rnn_cells_number, weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
 
-           self.awn_l1_ws = AdaptiveWeightNoise((rnn_cells_number+1), (3*win_unit_number), weight_scale, no_bias=False)
+           self.awn_l1_ws = AdaptiveWeightNoise((rnn_cells_number+1), (3*win_unit_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
 
-           self.awn_ws_l1 = AdaptiveWeightNoise((n_vocab+1), (4*rnn_cells_number), weight_scale, no_bias=False)
-           self.awn_ws_l2 = AdaptiveWeightNoise((n_vocab+1), (4*rnn_cells_number), weight_scale, no_bias=False)
-           self.awn_ws_l3 = AdaptiveWeightNoise((n_vocab+1), (4*rnn_cells_number), weight_scale, no_bias=False)
+           self.awn_ws_l1 = AdaptiveWeightNoise((n_chars+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+           self.awn_ws_l2 = AdaptiveWeightNoise((n_chars+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+           self.awn_ws_l3 = AdaptiveWeightNoise((n_chars+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
 
-           self.awn_l1_l1 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False)
-           self.awn_l2_l2 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False)
-           self.awn_l3_l3 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False)
-           self.awn_l1_l2 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False)
-           self.awn_l2_l3 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False)
+           self.awn_l1_l1 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+           self.awn_l2_l2 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+           self.awn_l3_l3 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+           self.awn_l1_l2 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+           self.awn_l2_l3 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
 
-           self.awn_l1_ms = AdaptiveWeightNoise((rnn_cells_number+1), (1+mix_comp_number*6), weight_scale, no_bias=False)
-           self.awn_l2_ms = AdaptiveWeightNoise((rnn_cells_number+1), (1+mix_comp_number*6), weight_scale, no_bias=False)
-           self.awn_l3_ms = AdaptiveWeightNoise((rnn_cells_number+1), (1+mix_comp_number*6), weight_scale, no_bias=False)
+           self.awn_l1_ms = AdaptiveWeightNoise((rnn_cells_number+1), (1+mix_comp_number*6), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+           self.awn_l2_ms = AdaptiveWeightNoise((rnn_cells_number+1), (1+mix_comp_number*6), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+           self.awn_l3_ms = AdaptiveWeightNoise((rnn_cells_number+1), (1+mix_comp_number*6), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
 
            self.ws = SoftWindow(win_unit_number)
 
-           self.l1 = L.LSTM(rnn_cells_number)
-           self.l2 = L.LSTM(rnn_cells_number)
-           self.l3 = L.LSTM(rnn_cells_number)
+           self.l1 = LSTM(rnn_cells_number)
+           self.l2 = LSTM(rnn_cells_number)
+           self.l3 = LSTM(rnn_cells_number)
 
            self.ms = MixtureDensityOutputs(mix_comp_number)
 
@@ -241,6 +273,9 @@ class Model(chainer.Chain):
         self.rnn_cells_number = rnn_layers_number
         self.mix_comp_number = mix_comp_number
         self.n_chars = n_chars
+        self.use_adaptive_noise = use_adaptive_noise
+        self._awn_weights = {}
+        self._awn_biases = {}
 
         self.reset_state()
 
@@ -254,7 +289,7 @@ class Model(chainer.Chain):
         self.ws_to_l1 = None
         self.loss_complex = None
 
-    def get_awn_weight_name(awn_link_name):
+    def get_awn_weight_name(self, awn_link_name):
         """
             Get the link name containing the weight
 
@@ -263,10 +298,10 @@ class Model(chainer.Chain):
             Returns:
                 (string)
         """
-        name = awn_link_name[4:] if awn_link_name[:4] == "awn_" or awn_link_name
+        name = awn_link_name[4:] if awn_link_name[:4] == "awn_" else awn_link_name
         return "awn_" + name + "_weight"
 
-    def get_awn_bias_name(awn_link_name):
+    def get_awn_bias_name(self, awn_link_name):
         """
             Get the link name containing the bias
 
@@ -275,10 +310,10 @@ class Model(chainer.Chain):
             Returns:
                 (string)
         """
-        name = awn_link_name[4:] if awn_link_name[:4] == "awn_" or awn_link_name
+        name = awn_link_name[4:] if awn_link_name[:4] == "awn_" else awn_link_name
         return "awn_" + name + "_bias"
 
-    def get_awn_weight_link(awn_link_name):
+    def get_awn_weight_link(self, awn_link_name):
         """
             Get the link containing the weight
 
@@ -288,11 +323,9 @@ class Model(chainer.Chain):
                 (link.Link)
         """
         name = self.get_awn_weight_name(awn_link_name)
-        if name not in self:
-            raise ValueError("Link {} does not exists in model".format(name))
-        return self[name]
+        return self._awn_weights[name]
 
-    def get_awn_bias_link(awn_link_name):
+    def get_awn_bias_link(self, awn_link_name):
         """
             Get the link containing the bias
 
@@ -302,12 +335,10 @@ class Model(chainer.Chain):
                 (link.Link)
         """
         name = self.get_awn_bias_name(awn_link_name)
-        if name not in self:
-            raise ValueError("Link {} does not exists in model".format(name))
-        return self[name]
+        return self._awn_biases[name]
 
 
-    def __call__(self, x, renew_weights=True, adaptive_noise = True):
+    def __call__(self, x, renew_weights=True):
         """ Unpack and configure the network """
         x_now, x_next, cs, ls, prob_bias, n_batches = x
         testing = not chainer.config.train
@@ -317,22 +348,24 @@ class Model(chainer.Chain):
 
         # Generate the weight and bias for adaptive weight noise
         if renew_weights:
-            for link_name in self.children():
-                if link_name[:2] != "awn":
+            for child_link in self.children():
+                if child_link.name[:3] != "awn":
                     continue
-                # The weight and bias adds _weight and _bias to the link_name.
+                # The weight and bias adds _weight and _bias to the child_link name.
                 # E.g: awn_x_l1 => awn_x_l1_weight, awn_x_l1_bias
-                weight_name = self.get_awn_weight_name(link_name)
-                bias_name = self.get_awn_bias_name(link_name)
+                weight_name = self.get_awn_weight_name(child_link.name)
+                bias_name = self.get_awn_bias_name(child_link.name)
                 if testing:
                     # Generate weight without weight noise
                     fW, b = F.split_axis(self.M, np.array([(self.in_size -1)*self.out_size]), axis=0)
                     W = F.reshape(fW, (self.out_size, self.in_size-1))
-                    self[weight_name] = W
-                    self[bias_name] = b
+                    self._awn_weights[weight_name] = W
+                    self._awn_biases[bias_name] = b
                 else:
                     # Generate weight with weight noise
-                    self[weight_name], self[bias_name], loss = self[link_name](n_batches, adaptive_noise)
+                    W, b, loss = child_link(n_batches)
+                    self._awn_weights[weight_name] = W
+                    self._awn_biases[bias_name] = b
                     if self.loss_complex is None:
                         self.loss_complex = F.reshape(loss, (1,1))
                     else:
@@ -345,15 +378,15 @@ class Model(chainer.Chain):
         l3_in = F.linear(x_now, self.get_awn_weight_link("x_l3"), self.get_awn_bias_link("x_l3"))
 
         # LSTM1
-        if self.wo is not None:
+        if self.ws_output is not None:
             l1_in += self.ws_to_l1
         l1_h = self.l1(l1_in, self.get_awn_weight_link("l1_l1"), self.get_awn_bias_link("l1_l1"))
 
         # SoftWindow
-        self.wo, self.eow = self.ws(cs, ls, l1_h, self.get_awn_weight_link("l1_ws"), self.get_awn_bias_link("l1_ws"))
-        self.ws_to_l1 = F.linear(self.wo, self.get_awn_weight_link("ws_l1"), self.get_awn_bias_link("ws_l1"))
-        self.ws_to_l2 = F.linear(self.wo, self.get_awn_weight_link("ws_l2"), self.get_awn_bias_link("ws_l2"))
-        self.ws_to_l3 = F.linear(self.wo, self.get_awn_weight_link("ws_l3"), self.get_awn_bias_link("ws_l3"))
+        self.ws_output, eow = self.ws(cs, ls, l1_h, self.get_awn_weight_link("l1_ws"), self.get_awn_bias_link("l1_ws"))
+        self.ws_to_l1 = F.linear(self.ws_output, self.get_awn_weight_link("ws_l1"), self.get_awn_bias_link("ws_l1"))
+        self.ws_to_l2 = F.linear(self.ws_output, self.get_awn_weight_link("ws_l2"), self.get_awn_bias_link("ws_l2"))
+        self.ws_to_l3 = F.linear(self.ws_output, self.get_awn_weight_link("ws_l3"), self.get_awn_bias_link("ws_l3"))
 
         # LSTM2
         l2_in += F.linear(l1_h, self.get_awn_weight_link("l1_l2"), self.get_awn_bias_link("l1_l2"))
@@ -363,11 +396,11 @@ class Model(chainer.Chain):
         # LSTM3
         l3_in += F.linear(l2_h, self.get_awn_weight_link("l2_l3"), self.get_awn_bias_link("l2_l3"))
         l3_in += self.ws_to_l3
-        l2_h = self.l3(l3_in, self.get_awn_weight_link("l3_l3"), self.get_awn_bias_link("l3_l3"))
+        l3_h = self.l3(l3_in, self.get_awn_weight_link("l3_l3"), self.get_awn_bias_link("l3_l3"))
 
         # Mixture Density Network
         loss_network, x_pred, eos, pi, mux, muy, sgx, sgy, rho = self.ms(
-            x_next, self.eow, l1_h, l2_h, l3_h,
+            x_next, eow, l1_h, l2_h, l3_h,
             self.get_awn_weight_link("l1_ms"),
             self.get_awn_weight_link("l2_ms"),
             self.get_awn_weight_link("l3_ms"),
@@ -377,7 +410,7 @@ class Model(chainer.Chain):
             prob_bias
         )
 
-        return loss_network, x_pred, eos, pi, mux, muy, sgx, rho, self.losses_complex
+        return loss_network, x_pred, eos, pi, mux, muy, sgx, sgy, rho, self.loss_complex
         
 
 # ===============================================
@@ -415,7 +448,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
 
     logger.info("Creating the model")
     if peephole == 0:
-        model = Model(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number, use_weight_noise=True if use_weight_noise == 1 else False)
+        model = Model(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number, use_adaptive_noise=True if use_weight_noise == 1 else False)
     else:
         model = ModelPeephole(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number)
 
@@ -425,7 +458,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
     optimizer.setup(model)
 
     if grad_clip is not 0:
-        optimizers.add_hook(chainer.optimizers.GradientClipping(grad_clip))
+        optimizer.add_hook(chainer.optimizers.GradientClipping(grad_clip))
 
     if resume:
         logger.info("Loading state from {}".format(output_dir + '/' + resume))
@@ -434,8 +467,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
     """ Enable cupy, if available """
     if gpu > -1:
         logger.info("Enabling CUpy")
-        cuda.get_device(gpu).use()
-        xp = cuda.cupy
+        chainer.cuda.get_device_from_id(gpu).use()
+        xp = cupy
         model.to_gpu()
     else:
         xp = np
@@ -492,7 +525,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
             for i in xrange(int(math.floor(len(group_set_training)/batch_size))):
                 n_batches_counter += 1
 
-            n_batches = chainer.Variable(xp.asarray(n_batches_counter).astype(xp.int32), volatile='auto')
+            with chainer.no_backprop_mode():
+                n_batches = chainer.Variable(xp.asarray(n_batches_counter).astype(xp.int32))
 
         """ Run the training for all the data in the mini-batch """
         prob_bias = 0.0
@@ -660,6 +694,10 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                 if truncated_data_samples is not -1:
                     t_max_valid = truncated_data_samples if t_max_valid > truncated_data_samples else t_max_valid
 
+                # Training parameters
+                loss_network = xp.zeros((offset_valid_batch_size, 1))
+                loss_complex = xp.zeros((offset_valid_batch_size, 1))
+
                 # One-hot encoding of character for all the sequence
                 cs_data = xp.zeros((offset_valid_batch_size, n_chars, n_max_seq_length))
                 ls_data = xp.zeros((offset_valid_batch_size, 1))
@@ -668,19 +706,21 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                         length = valid_characters_batch[j][k]
                         cs_data[j, length, k] = 1.0
 
-                cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32), volatile='on')
-                ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32), volatile='on')
-
-                # Training parameters
-                loss_network = xp.zeros((offset_valid_batch_size, 1))
-                loss_complex = xp.zeros((offset_valid_batch_size, 1))
                 
+                cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32))
+                ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32))
+ 
                 # For each data in the batchsize run the validation
                 for t in xrange(t_max-1):
-                    x_now = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t, 0:x_dim_valid]).astype(xp.float32), volatile='on')
-                    x_next = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t+1, 0:x_dim_valid]).astype(xp.float32), volatile='on')
+                    x_now = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t, 0:x_dim_valid]).astype(xp.float32))
+                    x_next = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t+1, 0:x_dim_valid]).astype(xp.float32))
                     logger.info("Validating data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1))
-                    loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, renew_weights=False, testing=True)
+
+                    with chainer.no_backprop_mode():
+                        #loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, renew_weights=False, testing=True)
+                        x = [x_now, x_next, cs, ls, prob_bias, n_batches]
+                        loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, renew_weights=False)
+
                     loss_network += loss_i.data
 
                 losses_valid = xp.copy(loss_network) if losses_valid is None else xp.concatenate((losses_valid, loss_network), axis=0)
@@ -715,7 +755,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
                 chainer.serializers.save_npz(save_dir + '/state-best', optimizer)
                 min_valid_loss[0] = accum_loss_network_valid[epoch, 0]
 
-            if epoch % save_interval:
+            if epoch % save_interval == 0:
                 accum_loss_network_valid_cpu = accum_loss_network_valid if xp == np else cuda.to_cpu(accum_loss_network_valid)
                 np.save(save_dir + '/loss_network_valid', accum_loss_network_valid_cpu)
 
