@@ -418,7 +418,7 @@ class Model(chainer.Chain):
 # ===============================================
 
 
-def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed):
+def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_dir, resume_model, resume_optimizer, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed):
     """ Train the model based on the data saved in ../processed """
     logger = logging.getLogger(__name__)
     logger.info('Training the model')
@@ -460,9 +460,12 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
     if grad_clip is not 0:
         optimizer.add_hook(chainer.optimizers.GradientClipping(grad_clip))
 
-    if resume:
+    if resume_dir:
         logger.info("Loading state from {}".format(output_dir + '/' + resume))
-        chainer.serializers.load_npz(output_dir + "/" + resume, optimizer)
+        if resume_model != "":
+            chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_model, model)
+        if resume_optimizer != "":
+            chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_optimizer, optimizer)
 
     """ Enable cupy, if available """
     if gpu > -1:
@@ -783,7 +786,9 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume, 
 @click.option('--peephole', type=click.INT, default=0, help='LSTM with Peephole.')
 @click.option('--epochs', type=click.INT, default=500, help='Number of epoch for training.')
 @click.option('--grad_clip', type=click.INT, default=0, help='Threshold for the gradient clipping.')
-@click.option('--resume', type=click.STRING, default='', help='Resume the optimization from a snapshot.')
+@click.option('--resume_dir', type=click.STRING, default='', help='Directory name for resuming the optimization from a snapshot.')
+@click.option('--resume_model', type=click.STRING, default='', help='Name of the model snapshot.')
+@click.option('--resume_optimizer', type=click.STRING, default='', help='Name of the optimizer snapshot.')
 @click.option('--gpu', type=click.INT, default=-1, help='GPU ID (negative value is CPU).')
 @click.option('--adaptive_noise', type=click.INT, default=1, help='Use Adaptive Weight Noise in the training process.')
 @click.option('--update_weight', type=click.INT, default=1, help='Update weights in the training process.')
