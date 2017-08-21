@@ -429,7 +429,7 @@ class Model(chainer.Chain):
 # ===============================================
 
 
-def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_dir, resume_model, resume_optimizer, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed):
+def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_dir, resume_model, resume_optimizer, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed, debug):
     """ Train the model based on the data saved in ../processed """
     logger = logging.getLogger(__name__)
     logger.info('Training the model')
@@ -442,6 +442,11 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     model_suffix_dir = "{0}-{1}-{2}".format(time.strftime("%Y%m%d-%H%M%S"), 'with_peephole' if peephole == 1 else 'no_peephole', batch_size)
     training_suffix = "{0}".format("training")
     state_suffix = "{0}".format("state")
+
+    """ Chainer's debug mode """
+    if debug == 1:
+        logger.info("Enabling Chainer's debug mode")
+        chainer.config.debug = True
 
     """ Fetching the model and the inputs """
     logger.info("Fetching the model and the inputs")
@@ -714,19 +719,21 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                 # One-hot encoding of character for all the sequence
                 cs_data = xp.zeros((offset_valid_batch_size, n_chars, n_max_seq_length))
                 ls_data = xp.zeros((offset_valid_batch_size, 1))
+                cs, ls = None
                 for j in xrange(len(valid_characters_batch)):
                     for k in xrange(len(valid_characters_batch[j])):
                         length = valid_characters_batch[j][k]
                         cs_data[j, length, k] = 1.0
 
-                
-                with chainer.no_backprop_mode():
-                    cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32))
-                    ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32))
- 
                 # For each data in the batchsize run the validation
                 for t in xrange(t_max-1):
-                    with chainer.no_backprop_mode():
+                    with chainer.no_backprop_mode(), chainer.using_config('train', False):
+                        if cs is None:
+                            cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32))
+                        if ls is None:
+                            ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32))
+
+
                         x_now = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t, 0:x_dim_valid]).astype(xp.float32))
                         x_next = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t+1, 0:x_dim_valid]).astype(xp.float32))
                         logger.info("Validating data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1))
@@ -811,6 +818,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 @click.option('--win_unit_number', type=click.INT, default=10, help='Number of soft-window components.')
 @click.option('--mix_comp_number', type=click.INT, default=20, help='Numver of Gaussian components for mixture density output.')
 @click.option('--random_seed', type=click.INT, default=None, help='Number of Gaussian components for mixture density output.')
+@click.option('--debug', type=click.INT, default=0, help='Chainer debugging mode.')
 def cli(**kwargs):
     main(**kwargs)
 
