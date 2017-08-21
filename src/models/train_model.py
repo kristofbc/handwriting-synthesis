@@ -577,11 +577,12 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                 back_prop_len = truncated_back_prop_len
 
             # For each data in the batchsize run the training
+            logger.info("Training {0} samples and back-propagating at every {1} samples".format(t_max, back_prop_len))
             for t in xrange(t_max-1):
                 t_forward = time.time()
                 x_now = chainer.Variable(xp.asarray(train_data_batch[0:offset_batch_size, t, 0:x_dim]).astype(xp.float32))
                 x_next = chainer.Variable(xp.asarray(train_data_batch[0:offset_batch_size, t+1, 0:x_dim]).astype(xp.float32))
-                logger.info("Training data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1))
+                #logger.info("Training data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1))
 
                 # The weight are updated only in the first iteration
                 local_update_weight = update_weight if t == 0 else False
@@ -705,6 +706,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             """ Validation step """
             prob_bias = 0.0
             losses_valid = None
+            logger.info("Validating data for epoch {0}".format(epoch+1))
             for valid_batch in valid_iter:
                 valid_batch = np.array(valid_batch)
                 valid_data_batch, valid_characters_batch = get_padded_data(valid_batch[:, 0], valid_batch[:, 1], False)
@@ -736,8 +738,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
                         x_now = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t, 0:x_dim_valid]).astype(xp.float32))
                         x_next = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t+1, 0:x_dim_valid]).astype(xp.float32))
-                        logger.info("Validating data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1))
-                        #loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, renew_weights=False, testing=True)
+                        #logger.info("Validating data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1)) #loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, renew_weights=False, testing=True)
                         x = [x_now, x_next, cs, ls, prob_bias, n_batches]
                         loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, renew_weights=False)
 
