@@ -105,9 +105,14 @@ def plot_loss_networks(train_network, valid_network, x_label="Epoch", y_label="L
     # Extract the coordinate of the losses
     coord_network_train, box_network_train, stats_network_train = [], [], []
     coord_network_valid, box_network_valid, stats_network_valid = [], [], []
+
     if len(train_network) > 0:
+        train_network = train_network[np.unique(np.nonzero(train_network)[0])]
+        train_network = train_network[np.unique(np.where(~np.isnan(train_network))[0])]
         coord_network_train, box_network_train, stats_network_train = get_coordinates(train_network[:, 0], train_network[:, 1])
     if len(valid_network) > 0:
+        valid_network = valid_network[np.unique(np.nonzero(valid_network)[0])]
+        valid_network = valid_network[np.unique(np.where(~np.isnan(valid_network))[0])]
         coord_network_valid, box_network_valid, stats_network_valid = get_coordinates(valid_network[:, 0], valid_network[:, 1])
 
     plt.figure(1)

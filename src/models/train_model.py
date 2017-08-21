@@ -25,10 +25,10 @@ import chainer.functions as F
 from chainer import variable
 from chainer import link
 
-from net.lstm import LSTM
+#from net.lstm import LSTM
 #from net.adaptive_weight_noise import AdaptiveWeightNoise
-from net.soft_window import SoftWindow
-from net.mixture_density_outputs import MixtureDensityOutputs
+#from net.soft_window import SoftWindow
+#from net.mixture_density_outputs import MixtureDensityOutputs
 
 from net.functions.adaptive_weight_noise import adaptive_weight_noise
 from net.functions.soft_window import soft_window
@@ -138,7 +138,9 @@ class SoftWindow(link.Link):
     def __init__(self, mix_size):
         super(SoftWindow, self).__init__()
 
-        self.mix_size=mix_size
+        self.mix_size = mix_size
+        self.ws = None
+        self.eow = None
         self.reset_state()
         
     def reset_state(self):
@@ -154,13 +156,12 @@ class SoftWindow(link.Link):
         a_hat, b_hat, k_hat =  F.split_axis(y, np.asarray([self.mix_size, 2*self.mix_size]), axis=1) 
         
         if self.k_prev is None:
-            with chainer.no_backprop_mode():
-                self.k_prev = variable.Variable(self.xp.zeros_like(k_hat.data))
+            self.k_prev = variable.Variable(self.xp.zeros_like(k_hat.data))
             
         self.ws, self.k_prev, self.eow = soft_window(cs, ls, a_hat, b_hat, k_hat, self.k_prev)
         return self.ws, self.eow
 
-class MixtureDensityOutput(link.Link):
+class MixtureDensityOutputs(link.Link):
     """
         Mixture-Density-Outputs layer.
 
@@ -175,8 +176,16 @@ class MixtureDensityOutput(link.Link):
     def __init__(self, mix_size):
         super(MixtureDensityOutputs, self).__init__()
 
-        self.loss=None
-        self.mix_size=mix_size
+        self.loss = None
+        self.xpred = None
+        self.eos = None
+        self.pi = None
+        self.mux = None
+        self.muy = None
+        self.sgx = None
+        self.sgy = None
+        self.rho = None
+        self.mix_size = mix_size
     
     def __call__(self, xnext, eow, h1, h2, h3, W1, W2, W3, b1, b2, b3, prob_bias):
         """
@@ -196,10 +205,11 @@ class MixtureDensityOutput(link.Link):
                 np.asarray([1, 1+self.mix_size, 1+2*self.mix_size, 
                             1+3*self.mix_size, 1+4*self.mix_size, 1+5*self.mix_size]), axis=1)
         
-        self.loss, self.xpred, self.eos, self.pi_, self.mux, self.muy, self.sgx, self.sgy, self.rho = mixture_density_outputs(
-                            xnext, eow, eos_hat, pi_hat * (1. + prob_bias), mu1_hat, mu2_hat, sg1_hat - prob_bias, sg2_hat - prob_bias, rho_hat) 
+        self.loss, self.xpred, self.eos, self.pi, self.mux, self.muy, self.sgx, self.sgy, self.rho = mixture_density_outputs(
+            xnext, eow, eos_hat, pi_hat * (1. + prob_bias), mu1_hat, mu2_hat, sg1_hat - prob_bias, sg2_hat - prob_bias, rho_hat
+        )
         
-        return self.loss, self.xpred, self.eos, self.pi_, self.mux, self.muy, self.sgx, self.sgy, self.rho
+        return self.loss, self.xpred, self.eos, self.pi, self.mux, self.muy, self.sgx, self.sgy, self.rho
         
 
 class LSTM(link.Link):
@@ -223,8 +233,8 @@ class LSTM(link.Link):
         if self.h is not None:
             lstm_in += F.linear(self.h, W_lateral, b_lateral)
         if self.c is None:
-            xp = self.xp
-            self.c = variable.Variable(xp.zeros((len(x.data), self.state_size), dtype=x.data.dtype))
+            self.c = variable.Variable(self.xp.zeros((len(x.data), self.state_size), dtype=x.data.dtype))
+
         self.c, self.h = F.lstm(self.c, lstm_in)
         return self.h
         
@@ -276,6 +286,7 @@ class Model(chainer.Chain):
         self.use_adaptive_noise = use_adaptive_noise
         self._awn_weights = {}
         self._awn_biases = {}
+        self.eow = None
 
         self.reset_state()
 
@@ -383,7 +394,7 @@ class Model(chainer.Chain):
         l1_h = self.l1(l1_in, self.get_awn_weight_link("l1_l1"), self.get_awn_bias_link("l1_l1"))
 
         # SoftWindow
-        self.ws_output, eow = self.ws(cs, ls, l1_h, self.get_awn_weight_link("l1_ws"), self.get_awn_bias_link("l1_ws"))
+        self.ws_output, self.eow = self.ws(cs, ls, l1_h, self.get_awn_weight_link("l1_ws"), self.get_awn_bias_link("l1_ws"))
         self.ws_to_l1 = F.linear(self.ws_output, self.get_awn_weight_link("ws_l1"), self.get_awn_bias_link("ws_l1"))
         self.ws_to_l2 = F.linear(self.ws_output, self.get_awn_weight_link("ws_l2"), self.get_awn_bias_link("ws_l2"))
         self.ws_to_l3 = F.linear(self.ws_output, self.get_awn_weight_link("ws_l3"), self.get_awn_bias_link("ws_l3"))
@@ -400,7 +411,7 @@ class Model(chainer.Chain):
 
         # Mixture Density Network
         loss_network, x_pred, eos, pi, mux, muy, sgx, sgy, rho = self.ms(
-            x_next, eow, l1_h, l2_h, l3_h,
+            x_next, self.eow, l1_h, l2_h, l3_h,
             self.get_awn_weight_link("l1_ms"),
             self.get_awn_weight_link("l2_ms"),
             self.get_awn_weight_link("l3_ms"),
@@ -461,7 +472,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
         optimizer.add_hook(chainer.optimizers.GradientClipping(grad_clip))
 
     if resume_dir:
-        logger.info("Loading state from {}".format(output_dir + '/' + resume))
+        logger.info("Loading state from {}".format(output_dir + '/' + resume_dir))
         if resume_model != "":
             chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_model, model)
         if resume_optimizer != "":
@@ -528,8 +539,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             for i in xrange(int(math.floor(len(group_set_training)/batch_size))):
                 n_batches_counter += 1
 
-            with chainer.no_backprop_mode():
-                n_batches = chainer.Variable(xp.asarray(n_batches_counter).astype(xp.int32))
+            n_batches = chainer.Variable(xp.asarray(n_batches_counter).astype(xp.int32))
 
         """ Run the training for all the data in the mini-batch """
         prob_bias = 0.0
@@ -554,7 +564,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             loss_network = xp.zeros((offset_batch_size, 1))
             loss_complex = xp.zeros(1)
             accum_loss = 0
-            model.zerograds()
+            model.cleargrads()
 
             # @TODO: Make the backpropagation length dynamic
             back_prop_len = t_max + 1 if t_max < 1600 else t_max / 2
@@ -710,16 +720,16 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                         cs_data[j, length, k] = 1.0
 
                 
-                cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32))
-                ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32))
+                with chainer.no_backprop_mode():
+                    cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32))
+                    ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32))
  
                 # For each data in the batchsize run the validation
                 for t in xrange(t_max-1):
-                    x_now = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t, 0:x_dim_valid]).astype(xp.float32))
-                    x_next = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t+1, 0:x_dim_valid]).astype(xp.float32))
-                    logger.info("Validating data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1))
-
                     with chainer.no_backprop_mode():
+                        x_now = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t, 0:x_dim_valid]).astype(xp.float32))
+                        x_next = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t+1, 0:x_dim_valid]).astype(xp.float32))
+                        logger.info("Validating data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1))
                         #loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, renew_weights=False, testing=True)
                         x = [x_now, x_next, cs, ls, prob_bias, n_batches]
                         loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, renew_weights=False)
