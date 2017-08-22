@@ -91,30 +91,39 @@ def visualize_dataset(data_index, data_dir, train_set=True):
     if not os.path.exists(data_dir):
         raise ValueError("Directory {} does not exists".format(data_dir))
 
-    data_index = int(data_index)
     suffix = "train" if train_set is True else "valid"
     data = np.load(data_dir + "/{0}/{1}_data".format(suffix, suffix))
     texts = np.load(data_dir + "/{0}/{1}_text".format(suffix, suffix))
     stats = np.load(data_dir + "/statistics")
-
-    if data_index > len(data) or data_index > len(texts):
-        raise ValueError("Data index {} does not exists in dataset".format(data_index))
     
-    strokes = data[data_index]
-    text = texts[data_index]
+    #data_index = int(data_index)
+    if isinstance(data_index, basestring):
+        if data_index == "*":
+            data_index = range(len(data))
+        else:
+            data_index = [data_index]
 
-    # Must "un-normalize" the data
-    strokes[:, 1] *= stats[3]
-    strokes[:, 0] *= stats[2]
-    strokes[:, 1] += stats[1]
-    strokes[:, 0] += stats[0]
+    for i in xrange(len(data_index)):
+        if i > len(data) or i > len(texts):
+            raise ValueError("Data index {} does not exists in dataset".format(i))
+        
+        strokes = data[i]
+        text = texts[i]
 
-    # Draw the generate handwritten text
-    plt.figure(1)
-    plt.subplot("{0}{1}{2}".format(1, 1, 1))
-    plt.title(text)
-    draw_from_strokes(strokes, plt)
-    plt.show()
+        # Must "un-normalize" the data
+        strokes[:, 1] *= stats[3]
+        strokes[:, 0] *= stats[2]
+        strokes[:, 1] += stats[1]
+        strokes[:, 0] += stats[0]
+
+        # Draw the generate handwritten text
+        plt.cla()
+        plt.clf()
+        plt.figure(1)
+        plt.subplot("{0}{1}{2}".format(1, 1, 1))
+        plt.title(text)
+        draw_from_strokes(strokes, plt)
+        plt.show()
 
 # ===============================================
 # Main entry point of the training process (main)
@@ -135,7 +144,10 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
         if "dataset:" in text:
             logger.info("Visualizing dataset")
             data_index = text[len("dataset:"):]
-            visualize_dataset(data_index[:data_index.index(":")], data_dir, True if data_index[data_index.index(":")+1:] == "train" else False)
+            if data_index == "*":
+                visualize_dataset("*", data_dir)
+            else:
+                visualize_dataset(data_index[:data_index.index(":")], data_dir, True if data_index[data_index.index(":")+1:] == "train" else False)
             return
         text = [text]
 
