@@ -721,7 +721,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                 # One-hot encoding of character for all the sequence
                 cs_data = xp.zeros((offset_valid_batch_size, n_chars, n_max_seq_length))
                 ls_data = xp.zeros((offset_valid_batch_size, 1))
-                cs, ls = None
+                cs, ls = None, None
                 for j in xrange(len(valid_characters_batch)):
                     for k in xrange(len(valid_characters_batch[j])):
                         length = valid_characters_batch[j][k]
