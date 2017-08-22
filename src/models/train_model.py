@@ -531,7 +531,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     losses_complex = None
     while train_iter.epoch < epochs:
         epoch = train_iter.epoch
-        logger.info("Beginning training for epoch {}".format(epoch+1))
+        logger.info("Beginning training for epoch {0} ({1}/{2})".format(epoch+1, train_iter.current_position/batch_size+1, int(math.ceil(len(group_set_training)/batch_size))))
 
         batch = np.array(train_iter.next())
 
