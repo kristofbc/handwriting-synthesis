@@ -531,7 +531,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     losses_network = None
     losses_complex = None
     recon_costs = None
-    mse_network = None
+    mse_network = []
     while train_iter.epoch < epochs:
         epoch = train_iter.epoch
         t_sub_epoch_start = time.time()
@@ -634,7 +634,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             # Update global statistics
             losses_network = xp.copy(loss_network) if losses_network is None else xp.concatenate((losses_network, loss_network), axis=0)
             losses_complex = xp.copy(loss_complex_i.data) if losses_complex is None else xp.concatenate((losses_complex, loss_complex_i.data), axis=0)
-            mse_network = xp.copy(xp.asarray([mse.data])) if mse_network is None else xp.concatenate((mse_network, xp.asarray([mse.data])), axis=0)
+            #mse_network = xp.copy(xp.asarray([mse.data])) if mse_network is None else xp.concatenate((mse_network, xp.asarray([mse.data])), axis=0)
+            mse_network.append(chainer.cuda.to_cpu(mse.data))
 
             model.reset_state()
             logger.info("Mini-batch computation time: {} seconds".format(time.time()-t_sub_epoch_start))
@@ -645,7 +646,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             # Global results for one epoch
             losses_network_cpu = losses_network if xp == np else cuda.to_cpu(losses_network)
             losses_complex_cpu = losses_complex if xp == np else cuda.to_cpu(losses_complex)
-            mse_network_cpu = mse_network
+            mse_network_cpu = np.asarray(mse_network)
 
             accum_loss_network_train[epoch, 0] = losses_network_cpu.mean()
             accum_loss_network_train[epoch, 1] = losses_network_cpu.std()
@@ -708,10 +709,19 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                                 accum_loss_complex_train[epoch, 1][13],
                                 accum_loss_complex_train[epoch, 1][14]))
 
+            # MSE
+            logger.info("Training MSE: {0:>9.4f} +- {1:<9.4f}  {2:>9.4f} < {3:>9.4f} < {4:>9.4f}"
+                        .format(accum_mse_network_train[epoch, 0],
+                                accum_mse_network_train[epoch, 1],
+                                accum_mse_network_train[epoch, 2],
+                                accum_mse_network_train[epoch, 4],
+                                accum_mse_network_train[epoch, 3]))
+
             """ Save the model """
             if epoch % save_interval == 0:
                 accum_loss_network_train_cpu = accum_loss_network_train if xp == np else cuda.to_cpu(accum_loss_network_train)
                 accum_loss_complex_train_cpu = accum_loss_complex_train if xp == np else cuda.to_cpu(accum_loss_complex_train)
+                accum_mse_network_train_cpu = accum_mse_network_train
 
                 save_dir = output_dir + '/' + model_suffix_dir
                 if not os.path.exists(save_dir):
@@ -720,6 +730,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                 logger.info("Saving the results for epoch {}".format(epoch+1))
                 np.save(save_dir + '/loss_network_train', accum_loss_network_train_cpu)
                 np.save(save_dir + '/loss_complex_train', accum_loss_complex_train_cpu)
+                np.save(save_dir + '/mse_network_train', accum_mse_network_train_cpu)
 
                 logger.info("Saving the model and the optimizer for epoch {}".format(epoch+1))
                 chainer.serializers.save_npz(save_dir + '/model-' + str(epoch), model)
@@ -816,7 +827,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             losses_network = None
             losses_complex = None
             recon_costs = None
-            mse_network = None
+            mse_network = []
 
     # Subsequent scripts can use the results of this network without having to open the npy files
     return accum_loss_network_train, accum_loss_network_valid

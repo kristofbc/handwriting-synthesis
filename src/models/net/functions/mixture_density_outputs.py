@@ -486,9 +486,10 @@ class MixtureDensityOutputs(function.Function):
                         
                     xnext_h[:, 2:] = self.eos[:, 0:1]
                     xnext_h[:, 2:] = xp.where(eow < 0, self.eos[:, 0:1], 2.)
+
                     self.xnext = xnext_h
-                    loss_t = xp.zeros((batchsize, 1)).astype(xp.float32)
-                    self.Zs = None
+                    #loss_t = xp.zeros((batchsize, 1)).astype(xp.float32)
+                    #self.Zs = None
                 
             else:   # prediction (sampling from probability distribution)
                 # pi, sgmx, sgmy, rho  <-- pi_hat, sgmx_hat, sgmy_hat, rho_hat
