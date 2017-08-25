@@ -250,6 +250,11 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
                 pi_i_cpu = chainer.cuda.to_cpu(pi_i.data)
                 x_pred_cpu = chainer.cuda.to_cpu(x_pred.data)
                 eos_i_cpu = chainer.cuda.to_cpu(eos_i.data)
+                mux_i_cpu = chainer.cuda.to_cpu(mux_i.data)
+                muy_i_cpu = chainer.cuda.to_cpu(muy_i.data)
+                sgx_i_cpu = chainer.cuda.to_cpu(sgx_i.data)
+                sgy_i_cpu = chainer.cuda.to_cpu(sgy_i.data)
+                rho_i_cpu = chainer.cuda.to_cpu(rho_i.data)
                 for k in xrange(pi_i_cpu.shape[0]):
                     def get_point_index(x, pi):
                         summ = 0
@@ -275,7 +280,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
 
                         return x[0][0], x[0][1]
 
-                    x1_pred, x2_pred = get_next_position_gaussian_2d(mux_i[k][idx].data, muy_i[k][idx].data, sgx_i[k][idx].data, sgy_i[k][idx].data, rho_i[k][idx].data)
+                    x1_pred, x2_pred = get_next_position_gaussian_2d(mux_i_cpu[k][idx], muy_i_cpu[k][idx], sgx_i_cpu[k][idx], sgy_i_cpu[k][idx], rho_i_cpu[k][idx])
                     #x1_pred = x_pred_cpu[k][0]
                     #x2_pred = x_pred_cpu[k][1]
 
