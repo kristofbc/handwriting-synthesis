@@ -6,7 +6,6 @@ import pandas as pd
 from glob import glob
 from xml.etree import ElementTree
 import numpy as np
-from dotenv import find_dotenv, load_dotenv
 import cPickle as pickle
 
 def get_text(data_file, text_files):
@@ -131,13 +130,10 @@ def get_normalized_data(train_data, valid_data):
 def get_data_padded(data, callback):
     dest = []
     for arr in data:
-        print(arr)
         l_pad = callback(arr)
         pads = np.zeros((l_pad, 3))
         pads[:, 2] = 2.0
         arr1 = np.r_[np.copy(arr), pads]
-        print(arr1)
-        exit()
         dest.append(arr1)
 
     return dest
@@ -229,9 +225,5 @@ if __name__ == '__main__':
 
     # not used in this stub but often useful for finding various files
     project_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
-
-    # find .env automagically by walking up directories until it's found, then
-    # load up the .env entries as environment variables
-    load_dotenv(find_dotenv())
 
     main()

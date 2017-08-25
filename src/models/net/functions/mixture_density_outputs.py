@@ -1,4 +1,6 @@
+from __future__ import print_function
 import numpy
+import six
 
 from chainer import cuda
 from chainer import function
@@ -98,7 +100,6 @@ class MixtureDensityOutputs(function.Function):
 
             x_type.shape[0] == e_type.shape[0],
         )
-        
         for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(e_type.shape[i] == x_type.shape[i])
         
@@ -183,7 +184,7 @@ class MixtureDensityOutputs(function.Function):
 
             pi_type.shape[1] == mux_type.shape[1],
         )
-        for i in range(2, type_check.eval(pi_type.ndim)):
+        for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(mux_type.shape[i] == pi_type.shape[i])
         
         type_check.expect(
@@ -195,7 +196,7 @@ class MixtureDensityOutputs(function.Function):
 
             pi_type.shape[1] == muy_type.shape[1],
         )
-        for i in range(2, type_check.eval(pi_type.ndim)):
+        for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(muy_type.shape[i] == pi_type.shape[i])
         
         type_check.expect(
@@ -207,7 +208,7 @@ class MixtureDensityOutputs(function.Function):
 
             pi_type.shape[1] == sgmx_type.shape[1],
         )
-        for i in range(2, type_check.eval(pi_type.ndim)):
+        for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(sgmx_type.shape[i] == pi_type.shape[i])
         
         type_check.expect(
@@ -219,7 +220,7 @@ class MixtureDensityOutputs(function.Function):
 
             pi_type.shape[1] == sgmy_type.shape[1],
         )
-        for i in range(2, type_check.eval(pi_type.ndim)):
+        for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(sgmy_type.shape[i] == pi_type.shape[i])
         
         type_check.expect(
@@ -231,7 +232,7 @@ class MixtureDensityOutputs(function.Function):
 
             pi_type.shape[1] == rho_type.shape[1],
         )
-        for i in range(2, type_check.eval(pi_type.ndim)):
+        for i in range(2, type_check.eval(x_type.ndim)):
             type_check.expect(rho_type.shape[i] == pi_type.shape[i])
                     
     def forward(self, inputs):
@@ -295,9 +296,14 @@ class MixtureDensityOutputs(function.Function):
                     xnext[idx, 1] += (x2*protect_mask)[idx, 0]
                     protect_mask[idx, 0] = 0.0
                 
-                xnext[:, 2] = self.eos[:, 0]
+                #xnext[:, 2] = self.eos[:, 0]
                 #xnext[:, 2] = numpy.where(eow < 0, xnext[:, 2], 2.)
-                xnext[:, 2] = numpy.where(eow[:, 2] < 0, xnext[:, 2], 2.)
+                xnext[:, 2] = self.eos[:, 0]
+                mask = eow < 0
+                if not mask.all():
+                    xnext[:, 2] = 2.0
+                #xnext[:, 2:] = xp.where(eow < 0, self.eos[:, 0:1], 2.)
+
                 self.xnext = xnext
                 #loss_t = None
                 loss_t = xp.zeros((batchsize, 1)).astype(xp.float32)
@@ -490,8 +496,7 @@ class MixtureDensityOutputs(function.Function):
                     
                     
                 xnext[:, 2:] = self.eos[:, 0:1]
-                #xnext[:, 2:] = xp.where(eow < 0, self.eos[:, 0:1], 2.)
-                xnext[:, 2:] = xp.where(eow[:, 2:] < 0, self.eos[:, 0:1], 2.)
+                xnext[:, 2:] = xp.where(eow < 0, self.eos[:, 0:1], 2.)
                 self.xnext = xnext
                 loss_t = xp.zeros((batchsize, 1)).astype(xp.float32)
                 self.Zs = None
@@ -606,9 +611,9 @@ class MixtureDensityOutputs(function.Function):
             
         #return gxs, geos.clip(th_min, th_max), gpi.clip(th_min, th_max), gmux.clip(th_min, th_max), gmuy.clip(th_min, th_max), gsgmx.clip(th_min, th_max),  gsgmy.clip(th_min, th_max), grho.clip(th_min, th_max),
         #print('mdn', geos, gpi, gmux, gmuy, gsgmx,  gsgmy, grho)
-    #return  None, None, geos.clip(th_min, th_max), gpi.clip(th_min, th_max), gmux.clip(th_min, th_max), gmuy.clip(th_min, th_max), gsgmx.clip(th_min, th_max),  gsgmy.clip(th_min, th_max), grho.clip(th_min, th_max),
+	#return  None, None, geos.clip(th_min, th_max), gpi.clip(th_min, th_max), gmux.clip(th_min, th_max), gmuy.clip(th_min, th_max), gsgmx.clip(th_min, th_max),  gsgmy.clip(th_min, th_max), grho.clip(th_min, th_max),
         return None, None, geos, gpi, gmux, gmuy, gsgmx,  gsgmy, grho,
 
 def mixture_density_outputs(xnext, eow, e_hat, pi_hat, mux_hat, muy_hat, sgmx_hat, sgmy_hat, rho_hat):
-
+    
     return MixtureDensityOutputs()(xnext, eow, e_hat, pi_hat, mux_hat, muy_hat, sgmx_hat, sgmy_hat, rho_hat)
