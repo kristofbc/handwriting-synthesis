@@ -516,6 +516,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     accum_loss_network_train = np.zeros((epochs, 5))
     accum_loss_network_valid = np.zeros((epochs, 5))
     accum_loss_complex_train = np.zeros((epochs, 2, 15))
+    accum_mse_network_train = np.zeros((epochs, 5))
 
     min_valid_loss = np.zeros(1)
     thr_valid_loss = -1100.0
@@ -530,6 +531,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     losses_network = None
     losses_complex = None
     recon_costs = None
+    mse_network = None
     while train_iter.epoch < epochs:
         epoch = train_iter.epoch
         t_sub_epoch_start = time.time()
@@ -580,6 +582,10 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
             # For each data in the batchsize run the training
             logger.info("Training {0} samples and back-propagating at every {1} samples".format(t_max, back_prop_len))
+
+            mse = None # MSE on x_pred
+            mse_gauss = None # MSE on extrapolated x using 2d gaussian
+
             for t in xrange(t_max-1):
                 t_forward = time.time()
                 # For all positions in the batch (t), take the current X,Y coordinate (x_now) and the next X,Y coordinate (x_next)
@@ -592,6 +598,10 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                 #loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, local_update_weight)
                 x = [x_now, x_next, cs, ls, prob_bias, n_batches]
                 loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, local_update_weight)
+                
+                # MSE on x_pred
+                with chainer.no_backprop_mode():
+                    mse = F.mean_squared_error(x_next, x_pred) if mse is None else mse + F.mean_squared_error(x_next, x_pred)
 
                 # Get stats
                 accum_loss += F.sum(loss_i)/offset_batch_size
@@ -624,15 +634,18 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             # Update global statistics
             losses_network = xp.copy(loss_network) if losses_network is None else xp.concatenate((losses_network, loss_network), axis=0)
             losses_complex = xp.copy(loss_complex_i.data) if losses_complex is None else xp.concatenate((losses_complex, loss_complex_i.data), axis=0)
+            mse_network = xp.copy(xp.asarray([mse.data])) if mse_network is None else xp.concatenate((mse_network, xp.asarray([mse.data])), axis=0)
 
             model.reset_state()
             logger.info("Mini-batch computation time: {} seconds".format(time.time()-t_sub_epoch_start))
+            logger.info("Mean squared error: {}".format(mse.data))
                 
         """ All the training mini-batches have been processed """
         if train_iter.is_new_epoch:
             # Global results for one epoch
             losses_network_cpu = losses_network if xp == np else cuda.to_cpu(losses_network)
             losses_complex_cpu = losses_complex if xp == np else cuda.to_cpu(losses_complex)
+            mse_network_cpu = mse_network
 
             accum_loss_network_train[epoch, 0] = losses_network_cpu.mean()
             accum_loss_network_train[epoch, 1] = losses_network_cpu.std()
@@ -642,6 +655,12 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
             accum_loss_complex_train[epoch, 0, 0:] = losses_complex_cpu.mean(axis=0)
             accum_loss_complex_train[epoch, 1, 0:] = losses_complex_cpu.std(axis=0)
+
+            accum_mse_network_train[epoch, 0] = mse_network_cpu.mean()
+            accum_mse_network_train[epoch, 1] = mse_network_cpu.std()
+            accum_mse_network_train[epoch, 2] = mse_network_cpu.min()
+            accum_mse_network_train[epoch, 3] = mse_network_cpu.max()
+            accum_mse_network_train[epoch, 4] = np.median(mse_network_cpu)
 
             elapsed_time = time.time() - t_epoch_start
 
@@ -797,6 +816,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             losses_network = None
             losses_complex = None
             recon_costs = None
+            mse_network = None
 
     # Subsequent scripts can use the results of this network without having to open the npy files
     return accum_loss_network_train, accum_loss_network_valid

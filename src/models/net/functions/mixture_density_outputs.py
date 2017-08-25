@@ -2,6 +2,7 @@ from __future__ import print_function
 import numpy
 import six
 
+import chainer
 from chainer import cuda
 from chainer import function
 from chainer.utils import type_check
@@ -270,6 +271,44 @@ class MixtureDensityOutputs(function.Function):
                 self.update_or_not[idx,0] = 0.0
                 loss_t = loss_t * self.update_or_not
                 self.xnext = xnext
+
+                # Prediction in training
+                xnext_h = numpy.copy(xnext)
+                with chainer.no_backprop_mode():
+                    myux_min_h = mux_hat.min(axis=1).reshape((batchsize, 1))
+                    myux_max_h = mux_hat.max(axis=1).reshape((batchsize, 1))
+                    myuy_min_h = muy_hat.min(axis=1).reshape((batchsize, 1))
+                    myuy_max_h = muy_hat.max(axis=1).reshape((batchsize, 1))
+                    protect_mask = numpy.ones((batchsize, 1))
+                    while protect_mask.sum() > 0:
+                        z1_h = numpy.random.uniform(size=batchsize).reshape((batchsize, 1))
+                        z2_ = numpy.random.uniform(size=batchsize).reshape((batchsize, 1))
+                        x1_h = myux_min_h + (myux_max_h - myux_min_h) * z1_h
+                        x2_h = myuy_min_h + (myuy_max_h - myuy_min_h) * z2_
+
+                        dx1_h = (x1_h - self.mux)/self.sgmx
+                        dx2_h = (x2_h - self.muy)/self.sgmy
+                        self.Zs_h  = dx1_h*dx1_h + dx2_h*dx2_h - 2.*self.rho_*dx1_h*dx2_h
+                        Ns = numpy.exp(- 0.5*self.Zs_h/ (1.-self.rho_**2))/(2.* 3.1415927 * self.sgmx * self.sgmy * numpy.sqrt(1. - self.rho_**2)+1e-10)
+                        gamma_hats_h =  self.pi_*Ns
+                        sum_gamma_hats = gamma_hats_h.sum(axis=1) # Pr(x|ys)
+                        
+                        us_h = numpy.random.uniform(size=batchsize)
+                        idx = numpy.where(sum_gamma_hats > us_h)[0]
+                        xnext_h[idx, 0] += (x1_h*protect_mask)[idx, 0] 
+                        xnext_h[idx, 1] += (x2_h*protect_mask)[idx, 0]
+                        protect_mask[idx, 0] = 0.0
+
+                    #xnext[:, 2] = self.eos[:, 0]
+                    #xnext[:, 2] = numpy.where(eow < 0, xnext[:, 2], 2.)
+                    xnext_h[:, 2] = self.eos[:, 0]
+                    mask = eow < 0
+                    if not mask.all():
+                        xnext_h[:, 2] = 2.0
+                    #xnext[:, 2:] = xp.where(eow < 0, self.eos[:, 0:1], 2.)
+
+                self.xnext = xnext_h
+
             else:   # prediction
                 xnext = numpy.zeros((batchsize, 3))
                 myux_min = mux_hat.min(axis=1).reshape((batchsize, 1))
@@ -357,6 +396,97 @@ class MixtureDensityOutputs(function.Function):
                 self.update_or_not = xp.where(x3==2., 0.0, 1.0).astype(xp.float32)
                 loss_t = loss_t * self.update_or_not
                 self.xnext = xnext
+
+                # Prediction in training
+                with chainer.no_backprop_mode():
+                    self.sgmx_h = xp.where( self.sgmx < 0.0015, 0.0015, self.sgmx)
+                    self.sgmy_h = xp.where( self.sgmy < 0.0015, 0.0015, self.sgmy)
+
+                    muxs = xp.empty((batchsize, M, M)).astype(xp.float32)
+                    muys = xp.empty((batchsize, M, M)).astype(xp.float32)
+                    _batch_matmul_gpu(mux_hat.reshape((batchsize, M, 1)), xp.ones((batchsize, 1, M)).astype(xp.float32), out=muxs)
+                    _batch_matmul_gpu(muy_hat.reshape((batchsize, M, 1)), xp.ones((batchsize, 1, M)).astype(xp.float32), out=muys)
+                    
+                    gamma_hats_at_components = cuda.elementwise(
+                    'T x1, T x2, T pi_, T mux_, T muy_, T sgmx_, T sgmy_, T rho_',  # input
+                    'T gammas',                                                     # output
+                    '''
+                        T rho2 = 1. - rho_*rho_ + 1e-10;
+                        T dx1 = (x1 - mux_)/sgmx_;
+                        T dx2 = (x2 - muy_)/sgmy_;
+                        T Zs = dx1*dx1 + dx2*dx2- 2.*rho_*dx1*dx2;
+                        T Ns = exp( -0.5*Zs /rho2)/(2. * 3.1415927 * sgmx_ * sgmy_ * sqrt(rho2));
+                        gammas = pi_ * Ns;
+                    ''',
+                    'mdout_fwd5', 
+                    )(muxs, 
+                      muys, 
+                      self.pi_.reshape((batchsize, 1, M)), 
+                      mux_hat.reshape((batchsize, 1, M)), 
+                      muy_hat.reshape((batchsize, 1, M)), 
+                      self.sgmx_h.reshape((batchsize, 1, M)), 
+                      self.sgmy_h.reshape((batchsize, 1, M)), 
+                      self.rho_.reshape((batchsize, 1, M))
+                    )
+                    
+                    sum_gamma_hats_at_components = gamma_hats_at_components.sum(axis=2)        # (batchsize, M)
+                    p_maxs = sum_gamma_hats_at_components.max(axis=1).reshape((batchsize, 1))  # (batchsize, 1)
+                    
+                    myux_min_h = mux_hat.min(axis=1).reshape((batchsize, 1, 1)) - 0.01
+                    myux_max_h = mux_hat.max(axis=1).reshape((batchsize, 1, 1)) + 0.01
+                    myuy_min_h = muy_hat.min(axis=1).reshape((batchsize, 1, 1)) - 0.01
+                    myuy_max_h = muy_hat.max(axis=1).reshape((batchsize, 1, 1)) + 0.01
+                    
+                    xnext_h = xp.zeros((batchsize, 3)).astype(xp.float32)
+                    protect_mask = xp.ones((batchsize, 1)).astype(xp.float32)
+                    n_samples = 32768 * 2 #16384 #8192 #4096 #2048 #1024 #512
+                    while protect_mask.sum() >0:
+                        # sampling n (=n_samples) samples in parallel at a step
+                        z1_h = xp.random.uniform(size=batchsize* n_samples).reshape((batchsize, n_samples, 1))
+                        z2_h = xp.random.uniform(size=batchsize* n_samples).reshape((batchsize, n_samples, 1))
+                        x1_h = (myux_min_h + (myux_max_h - myux_min_h) * z1_h).astype(xp.float32)  # (batchsize, n_samples, 1)
+                        x2_h = (myuy_min_h + (myuy_max_n - myuy_min_h) * z2_h).astype(xp.float32)  # (batchsize, n_samples, 1)
+                        gamma_hats_h = cuda.elementwise(
+                        'T x1, T x2, T pi_, T mux_, T muy_, T sgmx_, T sgmy_, T rho_',  # input
+                        'T gammas',                                               # output
+                        '''
+                            T rho2 = 1. - rho_*rho_ + 1e-10;
+                            T dx1 = (x1 - mux_)/sgmx_;
+                            T dx2 = (x2 - muy_)/sgmy_;
+                            T Zs = dx1*dx1 + dx2*dx2- 2.*rho_*dx1*dx2;
+                            T Ns = exp( -0.5*Zs /rho2)/(2. * 3.1415927 * sgmx_ * sgmy_ * sqrt(rho2));
+                            gammas = pi_ * Ns;
+                        ''',
+                        'mdout_fwd4', 
+                        )(
+                        x1_h, x2_h, 
+                        self.pi_.reshape(( batchsize, 1, M)), 
+                        mux_hat.reshape((  batchsize, 1, M)), 
+                        muy_hat.reshape((  batchsize, 1, M)), 
+                        self.sgmx_h.reshape((batchsize, 1, M)), 
+                        self.sgmy_h.reshape((batchsize, 1, M)), 
+                        self.rho_.reshape((batchsize, 1, M))
+                        )
+                        sum_gamma_hats_h = gamma_hats_h.sum(axis=2)
+
+                        us_h = xp.random.uniform(size=batchsize* n_samples).reshape((batchsize, n_samples)) * p_maxs
+                        update_mask__h  = xp.where(sum_gamma_hats_h > us_h, 1.0, 0.0).astype(xp.float32).reshape((batchsize, n_samples))
+                        update_mask_h = update_mask__h.max(axis=1).reshape((batchsize, 1))
+                        sample_idx_h  = update_mask__h.argmax(axis=1).reshape((batchsize, 1))
+                        for bb in xrange(batchsize):
+                            this_midx = sample_idx_h[bb, 0]
+                            x1_h[bb:bb+1, 0] = x1_h[bb:bb+1, this_midx:this_midx+1, 0]
+                            x2_h[bb:bb+1, 0] = x2_h[bb:bb+1, this_midx:this_midx+1, 0]
+                        xnext_h[:, 0]  += (x1_h*protect_mask*update_mask_h)[:, 0]
+                        xnext_h[:, 1]  += (x2_h*protect_mask*update_mask_h)[:, 0]
+                        protect_mask -= protect_mask * update_mask_h
+                        
+                        
+                    xnext_h[:, 2:] = self.eos[:, 0:1]
+                    xnext_h[:, 2:] = xp.where(eow < 0, self.eos[:, 0:1], 2.)
+                    self.xnext = xnext_h
+                    loss_t = xp.zeros((batchsize, 1)).astype(xp.float32)
+                    self.Zs = None
                 
             else:   # prediction (sampling from probability distribution)
                 # pi, sgmx, sgmy, rho  <-- pi_hat, sgmx_hat, sgmy_hat, rho_hat
