@@ -440,12 +440,14 @@ class MixtureDensityOutputs(function.Function):
                     xnext_h = xp.zeros((batchsize, 3)).astype(xp.float32)
                     protect_mask = xp.ones((batchsize, 1)).astype(xp.float32)
                     n_samples = 32768 * 2 #16384 #8192 #4096 #2048 #1024 #512
+                    x1_h = xp.copy(x1)
+                    x2_h = xp.copy(x2)
                     while protect_mask.sum() >0:
                         # sampling n (=n_samples) samples in parallel at a step
                         z1_h = xp.random.uniform(size=batchsize* n_samples).reshape((batchsize, n_samples, 1))
                         z2_h = xp.random.uniform(size=batchsize* n_samples).reshape((batchsize, n_samples, 1))
-                        x1_h = (myux_min_h + (myux_max_h - myux_min_h) * z1_h).astype(xp.float32)  # (batchsize, n_samples, 1)
-                        x2_h = (myuy_min_h + (myuy_max_n - myuy_min_h) * z2_h).astype(xp.float32)  # (batchsize, n_samples, 1)
+                        x1__h = (myux_min_h + (myux_max_h - myux_min_h) * z1_h).astype(xp.float32)  # (batchsize, n_samples, 1)
+                        x2__h = (myuy_min_h + (myuy_max_h - myuy_min_h) * z2_h).astype(xp.float32)  # (batchsize, n_samples, 1)
                         gamma_hats_h = cuda.elementwise(
                         'T x1, T x2, T pi_, T mux_, T muy_, T sgmx_, T sgmy_, T rho_',  # input
                         'T gammas',                                               # output
@@ -459,7 +461,7 @@ class MixtureDensityOutputs(function.Function):
                         ''',
                         'mdout_fwd4', 
                         )(
-                        x1_h, x2_h, 
+                        x1__h, x2__h, 
                         self.pi_.reshape(( batchsize, 1, M)), 
                         mux_hat.reshape((  batchsize, 1, M)), 
                         muy_hat.reshape((  batchsize, 1, M)), 
@@ -475,8 +477,8 @@ class MixtureDensityOutputs(function.Function):
                         sample_idx_h  = update_mask__h.argmax(axis=1).reshape((batchsize, 1))
                         for bb in xrange(batchsize):
                             this_midx = sample_idx_h[bb, 0]
-                            x1_h[bb:bb+1, 0] = x1_h[bb:bb+1, this_midx:this_midx+1, 0]
-                            x2_h[bb:bb+1, 0] = x2_h[bb:bb+1, this_midx:this_midx+1, 0]
+                            x1_h[bb:bb+1, 0] = x1__h[bb:bb+1, this_midx:this_midx+1, 0]
+                            x2_h[bb:bb+1, 0] = x2__h[bb:bb+1, this_midx:this_midx+1, 0]
                         xnext_h[:, 0]  += (x1_h*protect_mask*update_mask_h)[:, 0]
                         xnext_h[:, 1]  += (x2_h*protect_mask*update_mask_h)[:, 0]
                         protect_mask -= protect_mask * update_mask_h
