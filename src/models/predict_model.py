@@ -7,6 +7,12 @@ import numpy as np
 import chainer
 import chainer.functions as F
 
+try:
+    import cupy
+except:
+    cupy = np
+    pass
+
 from train_model import Model
 from train_model import get_padded_data
 from train_model import get_max_sequence_length
@@ -122,7 +128,7 @@ def visualize_dataset(data_index, data_dir, train_set=True):
 # Main entry point of the training process (main)
 # ===============================================
 
-def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gpu, peephole, grad_clip, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed):
+def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peephole, grad_clip, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed):
     """ Generate a handwriting sequence of ASCII characters """
     logger = logging.getLogger(__name__)
     path = models_dir + '/' + model_dir
@@ -130,6 +136,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
         raise ValueError("Directory {} does not exists".format(path))
 
     """ Import required data """
+    logger.info("Importing dataset")
     original_vocabulary = np.load(data_dir + "/vocabulary")
     stats = np.load(data_dir + "/statistics")
     train_data = np.load(data_dir + "/train/train_data")
@@ -180,43 +187,44 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
 
     # @TODO: should check if peephole is requested
     #n_chars_training = len(original_vocabulary)
-    model = Model(n_chars, input_size, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number)
+    model = Model(n_chars, input_size, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number, use_adaptive_noise=False)
     
-    # Load the model
-    chainer.serializers.load_npz(path + "/" + model_name, model)
-    logger.info("Model imported successfully")
-
     if gpu >= 0:
-        cuda.get_device(gpu).use()
+        chainer.cuda.get_device(gpu).use()
         model.to_gpu()
-        xp = chainer.cupy
+        xp = cupy
     else:
         xp = np
 
+    # Load the model
+    logger.info("Model imported successfully")
+    chainer.serializers.load_npz(path + "/" + model_name, model)
+
     """ Create the one-hot vocabulary sequence """
     #batchsize = len(text)
-    batchsize = len(train_characters)
+    #batchsize = len(train_characters)
     cs_data = xp.zeros((batchsize, n_chars, n_max_seq_length))
     ls_data = xp.zeros((batchsize, 1))
     for j in xrange(batchsize):
         for k in xrange(len(train_characters[j])):
             length = train_characters[j][k]
             cs_data[j, length, k] = 1.0
+        ls_data[j, 0] = k
 
     # @TODO: Make sure the length of the data match the input of the model
     #pad = xp.zeros((1, min(n_chars_training, abs(n_chars_training-n_chars)), n_max_seq_length)).astype(xp.float32)
     #pad.fill(2.0)
     #cs_data = xp.concatenate((cs_data, pad), axis=1)
-    x_data = xp.zeros((batchsize, 3)).astype(xp.float32)
-    x_next_data = xp.ones((batchsize, 3)).astype(xp.float32) * (-1.0)
-    max_sample_batchsize = 64
 
-    with chainer.no_backprop_mode():
+    with chainer.no_backprop_mode(), chainer.using_config('train', False):
         cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32))
         ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32))
-        n_batches = chainer.Variable(xp.asarray(max_sample_batchsize+xp.zeros(1)).astype(xp.int32))
+        n_batches = chainer.Variable(xp.asarray(batchsize+xp.zeros(1)).astype(xp.int32))
 
         for j in xrange(len(text)):
+            x_data = xp.zeros((batchsize, 3)).astype(xp.float32)
+            x_next_data = xp.ones((batchsize, 3)).astype(xp.float32) * (-1.0)
+
             prob_bias = 0.0
             loss_network = xp.zeros((batchsize, 1))
 
@@ -225,6 +233,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
             mse = 0
             cursor = truncated_back_prop_len if len(data_index) == 0 else len(train_data[data_index[j]])-1
             for i in xrange(cursor):
+                logger.info("Iteration {}".format(i))
                 # Start the prediction at postion 0, 0
                 x_now = chainer.Variable(xp.asarray(x_data[0:batchsize, 0:3]).astype(xp.float32))
                 x_next = chainer.Variable(xp.asarray(x_next_data[0:batchsize, 0:3].astype(xp.float32)))
@@ -238,36 +247,40 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
                 loss_network += loss_i.data
 
                 # From the distribution fetch a potential pen point
-                for k in xrange(len(pi_i)):
+                pi_i_cpu = chainer.cuda.to_cpu(pi_i.data)
+                x_pred_cpu = chainer.cuda.to_cpu(x_pred.data)
+                eos_i_cpu = chainer.cuda.to_cpu(eos_i.data)
+                for k in xrange(pi_i_cpu.shape[0]):
                     def get_point_index(x, pi):
                         summ = 0
                         for i in xrange(len(pi)):
-                            summ += pi[i]
+                            #summ += pi[i]
+                            summ = pi[i]
                             if summ.data >= x:
                                 return i
                         raise ValueError("Unable to sample index from distribution")
 
-                    idx_pos = get_point_index(random.random(), pi_i[k])
+                    #idx_pos = get_point_index(random.random(), pi_i[k])
+                    idx_pos = np.random.choice(range(len(pi_i_cpu[k])), p=pi_i_cpu[k])
 
                     # From the index, perform a simple gaussian 2d to get the next positions
                     def get_next_position_gaussian_2d(mux, muy, sgx, sgy, rho):
                         mean = np.asarray([mux, muy])
-                        mean += abs(math.floor(np.min(mean)))
                         covar = np.asarray([[sgx*sgx, rho*sgx*sgy], [rho*sgx*sgy, sgy*sgy]])
-                        covar += abs(math.floor(np.min(covar)))
 
                         x = np.random.multivariate_normal(mean, covar, 1)
-                        print(mean, covar)
-                        plt.plot(x[0][0], x[0][1], 'x')
-                        plt.axis('equal')
-                        plt.show()
+                        #plt.plot(x[0][0], x[0][1], 'x')
+                        #plt.axis('equal')
+                        #plt.show()
 
                         return x[0][0], x[0][1]
 
                     x1_pred, x2_pred = get_next_position_gaussian_2d(mux_i[k][idx].data, muy_i[k][idx].data, sgx_i[k][idx].data, sgy_i[k][idx].data, rho_i[k][idx].data)
+                    #x1_pred = x_pred_cpu[k][0]
+                    #x2_pred = x_pred_cpu[k][1]
 
-                    #eos_pred = 1 if eos_i[0].data < 0.10 else 0
-                    eos_pred = 1 if random.random() < eos_i[k].data else 0
+                    #eos_pred = 1 if random.random() < eos_i[k].data else 0
+                    eos_pred = 1.0 if eos_i_cpu[k] > 0.10 else 0.0
                     
                     x_data[k, 0] = x1_pred
                     x_data[k, 1] = x2_pred
@@ -279,23 +292,24 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
                 #x_data[:, 2:] = xp.where(x_pred.data[:, 2:] > 1.0, 2.0, x_data[:, 2:])
 
                 # Compare ground truth if requested
+                x_data_cpu = chainer.cuda.to_cpu(x_data)
                 if len(data_index) > 0:
                     x_gt = train_data[data_index[j]][i+1]
                     # @TODO: x_data[0] is harcoded
-                    mse += F.sum(F.square(x_gt[0:2] - x_data[0, 0:2]))/cursor
+                    mse += np.sum(np.square(x_gt[0:2] - x_data_cpu[0, 0:2]))/cursor
 
                 #mse += F.sum(F.square(x_next[:, 0:2] - x_pred[:, 0:2]))/len(x_pred)
 
                 # Store the results of the stoke
                 # @TODO: x_data[0] is harcoded
-                strokes = np.asarray([x_data[0]]) if len(strokes) == 0 else xp.concatenate((strokes, np.asarray([x_data[0]])))
+                strokes = np.asarray([x_data_cpu[0]]) if len(strokes) == 0 else np.concatenate((strokes, np.asarray([x_data_cpu[0]])))
 
                 # New positions
                 #x_now = x_pred.data.astype(xp.float32)
 
             # Compile the results
             losses_network_cpu = chainer.cuda.to_cpu(xp.copy(loss_network))
-            mse_cpu = chainer.cuda.to_cpu(mse.data)
+            mse_cpu = mse
             model.reset_state()
 
             """ Generate the handwriting sequence """
@@ -346,7 +360,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
 @click.argument('text', type=click.STRING)
 @click.option('--models_dir', type=click.Path(exists=True), default='models', help='Directory containing the models.')
 @click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWriting', help='Directory containing data.')
-@click.option('--downscale_factor', type=click.FLOAT, default=0.5, help='Downscale the image by this factor.')
+@click.option('--batchsize', type=click.INT, default=1, help='Control the number of MDN outputs.')
 @click.option('--gpu', type=click.INT, default=-1, help='ID of the gpu to use')
 @click.option('--peephole', type=click.INT, default=0, help='LSTM with Peephole.')
 @click.option('--grad_clip', type=click.INT, default=0, help='Threshold for the gradient clipping.')

@@ -16,7 +16,7 @@ def _mat_ptrs(a):
         GPU array of pointers to matrices
     """
     if a.shape[0] == 1:
-        return cuda.cupy.full((1,), a[0].data.ptr.value, dtype=numpy.intp)
+        return cuda.cupy.full((1,), a[0].data.ptr, dtype=numpy.intp)
     else:
         stride = a[1].data.ptr - a[0].data.ptr
         return cuda.cupy.arange(
@@ -389,7 +389,7 @@ class MixtureDensityOutputs(function.Function):
                 #   [muxn, muxn, ...., muxn]]  where n = batchsize
                 
                 muxs = xp.empty((batchsize, M, M)).astype(xp.float32)
-                muys = xp.cupy.empty((batchsize, M, M)).astype(xp.float32)
+                muys = xp.empty((batchsize, M, M)).astype(xp.float32)
                 _batch_matmul_gpu(mux_hat.reshape((batchsize, M, 1)), xp.ones((batchsize, 1, M)).astype(xp.float32), out=muxs)
                 _batch_matmul_gpu(muy_hat.reshape((batchsize, M, 1)), xp.ones((batchsize, 1, M)).astype(xp.float32), out=muys)
                 
