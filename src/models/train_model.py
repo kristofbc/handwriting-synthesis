@@ -529,8 +529,10 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     elapsed_backward = 0
     losses_network = None
     losses_complex = None
+    recon_costs = None
     while train_iter.epoch < epochs:
         epoch = train_iter.epoch
+        t_sub_epoch_start = time.time()
         logger.info("Beginning training for epoch {0} ({1}/{2})".format(epoch+1, train_iter.current_position/batch_size+1, int(math.ceil(len(group_set_training)/batch_size))))
 
         batch = np.array(train_iter.next())
@@ -580,13 +582,13 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             logger.info("Training {0} samples and back-propagating at every {1} samples".format(t_max, back_prop_len))
             for t in xrange(t_max-1):
                 t_forward = time.time()
+                # For all positions in the batch (t), take the current X,Y coordinate (x_now) and the next X,Y coordinate (x_next)
                 x_now = chainer.Variable(xp.asarray(train_data_batch[0:offset_batch_size, t, 0:x_dim]).astype(xp.float32))
                 x_next = chainer.Variable(xp.asarray(train_data_batch[0:offset_batch_size, t+1, 0:x_dim]).astype(xp.float32))
                 #logger.info("Training data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1))
 
                 # The weight are updated only in the first iteration
                 local_update_weight = update_weight if t == 0 else False
-
                 #loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, local_update_weight)
                 x = [x_now, x_next, cs, ls, prob_bias, n_batches]
                 loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, local_update_weight)
@@ -624,6 +626,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             losses_complex = xp.copy(loss_complex_i.data) if losses_complex is None else xp.concatenate((losses_complex, loss_complex_i.data), axis=0)
 
             model.reset_state()
+            logger.info("Mini-batch computation time: {} seconds".format(time.time()-t_sub_epoch_start))
                 
         """ All the training mini-batches have been processed """
         if train_iter.is_new_epoch:
@@ -707,6 +710,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             prob_bias = 0.0
             losses_valid = None
             logger.info("Validating data for epoch {0}".format(epoch+1))
+            recon_cost = 0
             for valid_batch in valid_iter:
                 valid_batch = np.array(valid_batch)
                 valid_data_batch, valid_characters_batch = get_padded_data(valid_batch[:, 0], valid_batch[:, 1], False)
@@ -735,16 +739,19 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                         if ls is None:
                             ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32))
 
-
                         x_now = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t, 0:x_dim_valid]).astype(xp.float32))
                         x_next = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t+1, 0:x_dim_valid]).astype(xp.float32))
                         #logger.info("Validating data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1)) #loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, renew_weights=False, testing=True)
                         x = [x_now, x_next, cs, ls, prob_bias, n_batches]
                         loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, renew_weights=False)
 
-                    loss_network += loss_i.data
+                        loss_network += loss_i.data
+
+                        # MSE
+                        #recon_cost += F.sum(F.square(x_next[:, 0:2] - x_pred[:, 0:2]))/offset_valid_batch_size
 
                 losses_valid = xp.copy(loss_network) if losses_valid is None else xp.concatenate((losses_valid, loss_network), axis=0)
+                #recon_costs = xp.asarray([recon_cost.data]) if recon_costs is None else xp.concatenate((recon_costs, xp.asarray([recon_cost.data])), axis=0)
 
                 # Reset the model after each batch of data for validation
                 model.reset_state()
@@ -754,12 +761,14 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
             """ Statistics for validation """
             losses_network_cpu = losses_valid if xp == np else cuda.to_cpu(losses_valid)
+            #recon_costs_cpu = recon_costs if xp == np else cuda.to_cpu(recon_costs)
 
             accum_loss_network_valid[epoch, 0] = losses_network_cpu.mean()
             accum_loss_network_valid[epoch, 1] = losses_network_cpu.std()
             accum_loss_network_valid[epoch, 2] = losses_network_cpu.min()
             accum_loss_network_valid[epoch, 3] = losses_network_cpu.max()
             accum_loss_network_valid[epoch, 4] = np.median(losses_network_cpu)
+            #accum_loss_network_valid[epoch, 5] = recon_costs_cpu
 
             logger.info("Epoch: {0}/{1} completed for validation".format(epoch+1, epochs))
             logger.info("Validation loss network: {0:>9.4f} +- {1:<9.4f}  {2:>9.4f} < {3:>9.4f} < {4:>9.4f}"
@@ -787,6 +796,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             elapsed_backward = 0
             losses_network = None
             losses_complex = None
+            recon_costs = None
 
     # Subsequent scripts can use the results of this network without having to open the npy files
     return accum_loss_network_train, accum_loss_network_valid

@@ -15,6 +15,8 @@ import click
 import os
 import time
 import logging
+import random
+import math
 
 import matplotlib.mlab as mlab
 import matplotlib.pyplot as plt
@@ -127,9 +129,16 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
     if not os.path.exists(path + '/' + model_name):
         raise ValueError("Directory {} does not exists".format(path))
 
+    """ Import required data """
+    original_vocabulary = np.load(data_dir + "/vocabulary")
+    stats = np.load(data_dir + "/statistics")
+    train_data = np.load(data_dir + "/train/train_data")
+    train_characters = np.load(data_dir + "/train/train_characters")
+
     """ Parse the input character sequences """
     # Create the vocabulary array
     logger.info("Parsing the input character sequence")
+    data_index = []
     if not isinstance(text, list):
         # Special case when user wants to visualize data set
         if "dataset:" in text:
@@ -137,11 +146,32 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
             data_index = text[len("dataset:"):]
             visualize_dataset(data_index[:data_index.index(":")], data_dir, True if data_index[data_index.index(":")+1:] == "train" else False)
             return
-        text = [text]
+        # Special case when the user wants to compare the generation against ground true
+        elif "gt:" in text:
+            logger.info("Importing requested ground-truth")
+            data_index = text[len("gt:"):]
+            
+            if data_index == "*":
+                data_index = range(len(train_data))
 
-    cha_index, vocabulary = get_char_to_index(text)
-    n_chars = len(vocabulary)
-    train_characters = cha_index[0:len(text)]
+            if isinstance(data_index, basestring):
+                data_index = [int(data_index)]
+
+            text = []
+            inv_map = {v: k for k, v in original_vocabulary.iteritems()}
+            for idx in data_index:
+                if idx > len(train_data):
+                    raise ValueError("Index {} is not in training set".format(idx))
+                
+                tmp = ''.join([inv_map[char_idx] for char_idx in train_characters[idx]])
+                text.append(tmp)
+        # Default text parameter
+        else:
+            text = [text]
+
+    #n_chars = len(vocabulary)
+    # @TODO: character size should be dynamic (83 is the length of the current data)
+    n_chars = 83
     n_max_seq_length = get_max_sequence_length(train_characters)
     
     """ Import the trained model """
@@ -149,11 +179,8 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
     input_size = 3 # dimensions of x (x, y, end-of-stroke)
 
     # @TODO: should check if peephole is requested
-    # @TODO: character size should be dynamic (74 is the length of the current data)
-    original_vocabulary = np.load(data_dir + "/vocabulary")
-    stats = np.load(data_dir + "/statistics")
-    n_chars_training = len(original_vocabulary)
-    model = Model(n_chars_training, input_size, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number)
+    #n_chars_training = len(original_vocabulary)
+    model = Model(n_chars, input_size, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number)
     
     # Load the model
     chainer.serializers.load_npz(path + "/" + model_name, model)
@@ -167,7 +194,8 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
         xp = np
 
     """ Create the one-hot vocabulary sequence """
-    batchsize = len(text)
+    #batchsize = len(text)
+    batchsize = len(train_characters)
     cs_data = xp.zeros((batchsize, n_chars, n_max_seq_length))
     ls_data = xp.zeros((batchsize, 1))
     for j in xrange(batchsize):
@@ -176,60 +204,136 @@ def main(model_dir, model_name, text, models_dir, data_dir, downscale_factor, gp
             cs_data[j, length, k] = 1.0
 
     # @TODO: Make sure the length of the data match the input of the model
-    pad = xp.zeros((1, min(n_chars_training, abs(n_chars_training-n_chars)), n_max_seq_length)).astype(xp.float32)
+    #pad = xp.zeros((1, min(n_chars_training, abs(n_chars_training-n_chars)), n_max_seq_length)).astype(xp.float32)
     #pad.fill(2.0)
-    cs_data = xp.concatenate((cs_data, pad), axis=1)
+    #cs_data = xp.concatenate((cs_data, pad), axis=1)
+    x_data = xp.zeros((batchsize, 3)).astype(xp.float32)
+    x_next_data = xp.ones((batchsize, 3)).astype(xp.float32) * (-1.0)
+    max_sample_batchsize = 64
 
-    cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32))
-    ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32))
+    with chainer.no_backprop_mode():
+        cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32))
+        ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32))
+        n_batches = chainer.Variable(xp.asarray(max_sample_batchsize+xp.zeros(1)).astype(xp.int32))
 
-    # Start the prediction at postion 0, 0
-    x_now = chainer.Variable(xp.asarray([[0,0,1]], dtype=np.float32))
-    x_next = chainer.Variable(xp.asarray([[-1.0, -1.0, -1.0]]).astype(xp.float32))
-    prob_bias = 0.0
-    n_batches = chainer.Variable(xp.asarray(1+xp.zeros(1)).astype(xp.int32), volatile='auto')
-    loss_network = xp.zeros((1, 1))
+        for j in xrange(len(text)):
+            prob_bias = 0.0
+            loss_network = xp.zeros((batchsize, 1))
 
-    # The loop is defined by the backprop length
-    strokes = []
-    for i in xrange(truncated_back_prop_len):
-        # The weight are updated only in the first iteration
-        local_update_weight = True if i == 0 else False
+            # The loop is defined by the backprop length
+            strokes = []
+            mse = 0
+            cursor = truncated_back_prop_len if len(data_index) == 0 else len(train_data[data_index[j]])-1
+            for i in xrange(cursor):
+                # Start the prediction at postion 0, 0
+                x_now = chainer.Variable(xp.asarray(x_data[0:batchsize, 0:3]).astype(xp.float32))
+                x_next = chainer.Variable(xp.asarray(x_next_data[0:batchsize, 0:3].astype(xp.float32)))
+                
+                # The weight are updated only in the first iteration
+                local_update_weight = True if i == 0 else False
 
-        # Predict the next stroke
-        loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, local_update_weight, testing=False)
-        loss_network += loss_i.data
+                # Predict the next stroke
+                x = [x_now, x_next, cs, ls, prob_bias, n_batches]
+                loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, renew_weights=local_update_weight)
+                loss_network += loss_i.data
 
-        # Transform the output
-        # ...
+                # From the distribution fetch a potential pen point
+                for k in xrange(len(pi_i)):
+                    def get_point_index(x, pi):
+                        summ = 0
+                        for i in xrange(len(pi)):
+                            summ += pi[i]
+                            if summ.data >= x:
+                                return i
+                        raise ValueError("Unable to sample index from distribution")
 
-        # Store the results of the stoke
-        strokes = x_pred.data if len(strokes) == 0 else xp.concatenate((strokes, x_pred.data))
+                    idx_pos = get_point_index(random.random(), pi_i[k])
 
-        # New positions
-        x_now = x_pred.data.astype(xp.float32)
+                    # From the index, perform a simple gaussian 2d to get the next positions
+                    def get_next_position_gaussian_2d(mux, muy, sgx, sgy, rho):
+                        mean = np.asarray([mux, muy])
+                        mean += abs(math.floor(np.min(mean)))
+                        covar = np.asarray([[sgx*sgx, rho*sgx*sgy], [rho*sgx*sgy, sgy*sgy]])
+                        covar += abs(math.floor(np.min(covar)))
 
-    # Compile the results
-    losses_network_cpu = chainer.cuda.to_cpu(xp.copy(loss_network))
+                        x = np.random.multivariate_normal(mean, covar, 1)
+                        print(mean, covar)
+                        plt.plot(x[0][0], x[0][1], 'x')
+                        plt.axis('equal')
+                        plt.show()
 
-    """ Generate the handwriting sequence """
-    # @TODO: must fetch the stats dynamically
-    # Must "un-normalize" the generated strokes
-    strokes[:, 1] *= stats[3]
-    strokes[:, 0] *= stats[2]
-    strokes[:, 1] += stats[1]
-    strokes[:, 0] += stats[0]
+                        return x[0][0], x[0][1]
 
-    # Draw the generate handwritten text
-    plt.figure(1)
-    strokes = xp.concatenate((strokes, xp.asarray([[0.0, 0.0, 1.0]])))
-    for i in xrange(len(text)):
-        logger.info("Generating the handwriting sequence for '{}'".format(text[i]))
-        plt.subplot("{0}{1}{2}".format(len(text), 1, i+1))
-        plt.title(text[i])
-        draw_from_strokes(strokes, plt)
-        #plt.show()
-        plt.savefig(path + "/" + text[i].replace(" ", "-") + ".png")
+                    x1_pred, x2_pred = get_next_position_gaussian_2d(mux_i[k][idx].data, muy_i[k][idx].data, sgx_i[k][idx].data, sgy_i[k][idx].data, rho_i[k][idx].data)
+
+                    #eos_pred = 1 if eos_i[0].data < 0.10 else 0
+                    eos_pred = 1 if random.random() < eos_i[k].data else 0
+                    
+                    x_data[k, 0] = x1_pred
+                    x_data[k, 1] = x2_pred
+                    x_data[k, 2] = eos_pred
+
+                # Transform the output
+                #x_data[:, 0:2] = x_pred.data[:, 0:2]
+                #x_data[:, 2:] = xp.where(x_pred.data[:, 2:] > 0.10, 1.0, x_pred.data[:, 2:])
+                #x_data[:, 2:] = xp.where(x_pred.data[:, 2:] > 1.0, 2.0, x_data[:, 2:])
+
+                # Compare ground truth if requested
+                if len(data_index) > 0:
+                    x_gt = train_data[data_index[j]][i+1]
+                    # @TODO: x_data[0] is harcoded
+                    mse += F.sum(F.square(x_gt[0:2] - x_data[0, 0:2]))/cursor
+
+                #mse += F.sum(F.square(x_next[:, 0:2] - x_pred[:, 0:2]))/len(x_pred)
+
+                # Store the results of the stoke
+                # @TODO: x_data[0] is harcoded
+                strokes = np.asarray([x_data[0]]) if len(strokes) == 0 else xp.concatenate((strokes, np.asarray([x_data[0]])))
+
+                # New positions
+                #x_now = x_pred.data.astype(xp.float32)
+
+            # Compile the results
+            losses_network_cpu = chainer.cuda.to_cpu(xp.copy(loss_network))
+            mse_cpu = chainer.cuda.to_cpu(mse.data)
+            model.reset_state()
+
+            """ Generate the handwriting sequence """
+            # @TODO: must fetch the stats dynamically
+            # Must "un-normalize" the generated strokes
+            def denormalize(data):
+                data[:, 1] *= stats[3]
+                data[:, 0] *= stats[2]
+                data[:, 1] += stats[1]
+                data[:, 0] += stats[0]
+
+                return data
+
+            # Draw the generate handwritten text
+            plt.cla(); plt.clf()
+            plt.figure(1)
+            #strokes = xp.concatenate((strokes, xp.asarray([[0.0, 0.0, 1.0]])))
+
+            logger.info("Generating the handwriting sequence for '{}'".format(text[j]))
+            
+            # Draw the ground-truth and the ground-truth-prediction overlay if requested
+            if len(data_index) > 0:
+                plt.subplot("{0}{1}{2}".format(2, 1, 1))
+                plt.title(text[j] + " (MSE: {})".format(mse_cpu))
+                gt_stroke = denormalize(train_data[data_index[j]])
+                draw_from_strokes(gt_stroke, plt)
+                
+                plt.subplot("{0}{1}{2}".format(2, 1, 2))
+                pred_stroke = denormalize(strokes)
+                draw_from_strokes(pred_stroke, plt)
+            else:
+                plt.subplot("{0}{1}{2}".format(1, 1, 1))
+                plt.title(text[j])
+                pred_stroke = denormalize(strokes)
+                draw_from_strokes(pred_stroke, plt)
+
+            plt.show()
+            #plt.savefig(path + "/" + text[i].replace(" ", "-") + ".png")
 
 
 # ===============
