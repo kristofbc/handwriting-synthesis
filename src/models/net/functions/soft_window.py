@@ -122,7 +122,7 @@ class SoftWindow(function.Function):
             self.phai_mat =  self.alpha * numpy.exp(- self.beta * (self.kappa - us)**2) # --> (batchsize, K, U)
             ws = numpy.matmul(cs, self.phai_mat.sum(axis=1).reshape(batchsize, U, 1)) # (batchsize, W, U) x (batchsize, U, 1)--> (batchsize, W, 1)
             if ls.sum() > 0: #ls is not None:
-                max_phai_idx = np.sum(self.phai_mat, axis=1).argmax(axis=1) # (batchsize, K, U) --> (batchsize, U) --> (batchsize, 1)
+                max_phai_idx = numpy.sum(self.phai_mat, axis=1).argmax(axis=1) # (batchsize, K, U) --> (batchsize, U) --> (batchsize, 1)
                 eow = numpy.where(max_phai_idx > ls, max_phai_idx, -1)                # (batchsize, 1)
             else:
                 eow = numpy.zeros((batchsize, U)) #None

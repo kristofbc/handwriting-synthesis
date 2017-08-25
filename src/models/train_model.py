@@ -352,7 +352,7 @@ class Model(chainer.Chain):
     def __call__(self, x, renew_weights=True):
         """ Unpack and configure the network """
         x_now, x_next, cs, ls, prob_bias, n_batches = x
-        testing = not chainer.config.train
+        testing = chainer.config.train is False
 
         # Use CuPY if available
         xp = cuda.get_array_module(*x_now.data)
@@ -368,8 +368,8 @@ class Model(chainer.Chain):
                 bias_name = self.get_awn_bias_name(child_link.name)
                 if testing:
                     # Generate weight without weight noise
-                    fW, b = F.split_axis(self.M, np.array([(self.in_size -1)*self.out_size]), axis=0)
-                    W = F.reshape(fW, (self.out_size, self.in_size-1))
+                    fW, b = F.split_axis(child_link.M, np.array([(child_link.in_size -1)*child_link.out_size]), axis=0)
+                    W = F.reshape(fW, (child_link.out_size, child_link.in_size-1))
                     self._awn_weights[weight_name] = W
                     self._awn_biases[bias_name] = b
                 else:
@@ -476,13 +476,6 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     if grad_clip is not 0:
         optimizer.add_hook(chainer.optimizers.GradientClipping(grad_clip))
 
-    if resume_dir:
-        logger.info("Loading state from {}".format(output_dir + '/' + resume_dir))
-        if resume_model != "":
-            chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_model, model)
-        if resume_optimizer != "":
-            chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_optimizer, optimizer)
-
     """ Enable cupy, if available """
     if gpu > -1:
         logger.info("Enabling CUpy")
@@ -491,6 +484,13 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
         model.to_gpu()
     else:
         xp = np
+
+    if resume_dir:
+        logger.info("Loading state from {}".format(output_dir + '/' + resume_dir))
+        if resume_model != "":
+            chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_model, model)
+        if resume_optimizer != "":
+            chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_optimizer, optimizer)
 
     # Create an array of [train_data, train_characters]
     group_set_training = []
@@ -732,8 +732,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                         cs_data[j, length, k] = 1.0
 
                 # For each data in the batchsize run the validation
-                for t in xrange(t_max-1):
-                    with chainer.no_backprop_mode(), chainer.using_config('train', False):
+                with chainer.no_backprop_mode(), chainer.using_config('train', False):
+                    for t in xrange(t_max-1):
                         if cs is None:
                             cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32))
                         if ls is None:
