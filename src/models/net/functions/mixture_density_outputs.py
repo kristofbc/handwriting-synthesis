@@ -301,11 +301,12 @@ class MixtureDensityOutputs(function.Function):
 
                     #xnext[:, 2] = self.eos[:, 0]
                     #xnext[:, 2] = numpy.where(eow < 0, xnext[:, 2], 2.)
-                    xnext_h[:, 2] = self.eos[:, 0]
-                    mask = eow < 0
-                    if not mask.all():
-                        xnext_h[:, 2] = 2.0
+                    #xnext_h[:, 2] = self.eos[:, 0]
+                    #mask = eow < 0
+                    #if not mask.all():
+                    #    xnext_h[:, 2] = 2.0
                     #xnext[:, 2:] = xp.where(eow < 0, self.eos[:, 0:1], 2.)
+                    xnext_h[:, 2] = xp.where(self.eos[:, 0] > 0.10, 1.0, 0.0)
 
                 self.xnext = xnext_h
 
@@ -484,13 +485,13 @@ class MixtureDensityOutputs(function.Function):
                         protect_mask -= protect_mask * update_mask_h
                         
                         
-                    xnext_h[:, 2:] = self.eos[:, 0:1]
-                    xnext_h[:, 2:] = xp.where(eow < 0, self.eos[:, 0:1], 2.)
+                    xnext_h[:, 2:] = xp.where(self.eos[:, 0:1] > 0.10, 1.0, 0.0)
+                    #xnext_h[:, 2:] = xp.where(eow < 0, self.eos[:, 0:1], 2.)
 
                     self.xnext = xnext_h
                     #loss_t = xp.zeros((batchsize, 1)).astype(xp.float32)
                     #self.Zs = None
-                
+               i 
             else:   # prediction (sampling from probability distribution)
                 # pi, sgmx, sgmy, rho  <-- pi_hat, sgmx_hat, sgmy_hat, rho_hat
                 self.pi_, self.sgmx, self.sgmy, self.rho_ = cuda.elementwise(
