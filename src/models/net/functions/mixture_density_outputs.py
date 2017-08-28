@@ -491,7 +491,7 @@ class MixtureDensityOutputs(function.Function):
                     self.xnext = xnext_h
                     #loss_t = xp.zeros((batchsize, 1)).astype(xp.float32)
                     #self.Zs = None
-               i 
+
             else:   # prediction (sampling from probability distribution)
                 # pi, sgmx, sgmy, rho  <-- pi_hat, sgmx_hat, sgmy_hat, rho_hat
                 self.pi_, self.sgmx, self.sgmy, self.rho_ = cuda.elementwise(
