@@ -652,12 +652,12 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             losses_network = xp.copy(loss_network) if losses_network is None else xp.concatenate((losses_network, loss_network), axis=0)
             losses_complex = xp.copy(loss_complex_i.data) if losses_complex is None else xp.concatenate((losses_complex, loss_complex_i.data), axis=0)
             #mse_network = xp.copy(xp.asarray([mse.data])) if mse_network is None else xp.concatenate((mse_network, xp.asarray([mse.data])), axis=0)
-            mse_network.append(chainer.cuda.to_cpu(mse.data))
+            mse_network.append(chainer.cuda.to_cpu(mse))
             mse_eos_network.append(chainer.cuda.to_cpu(mse_eos))
 
             model.reset_state()
             logger.info("Mini-batch computation time: {} seconds".format(time.time()-t_sub_epoch_start))
-            logger.info("Mean squared error: {}".format(mse.data))
+            logger.info("Mean squared error: {}".format(mse))
             logger.info("Mean squared error EOS: {}".format(mse_eos))
                 
         """ All the training mini-batches have been processed """
