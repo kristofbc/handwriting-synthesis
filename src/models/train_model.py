@@ -604,7 +604,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
                 # MSE on x_pred
                 x_pred = F.expand_dims(x_pred, axis=1)
-                x_predictions = x_pred if x_predictions is None else xp.concatenate((x_predictions, x_pred), axis=1)
+                x_predictions = x_pred.data if x_predictions is None else xp.concatenate((x_predictions, x_pred.data), axis=1)
 
                 # Get stats
                 accum_loss += F.sum(loss_i)/offset_batch_size
@@ -640,25 +640,25 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             for m in xrange(len(train_data_batch)):
                 for n in xrange(len(train_data_batch[m]), t_max-1):
                     if train_data_batch[m][n][2] == 2:
-                        mask_padding[m][n] = np.zeros((3))
+                        mask_padding[m][n] = xp.zeros((3))
 
             def mse_op(true, pred, mask):
                 return xp.sum(xp.square(true*mask - pred*mask))/pred.shape[1]
 
-            mse = mse_op(train_data_batch[0:offset_batch_size, 1:t_max, 0:2], x_predictions[0:offset_batch_size, 0:t_max-1, 0:2], mask_padding[:,:,0:2])
-            mse_eos = mse_op(train_data_batch[0:offset_batch_size, 1:t_max, 2:3], x_predictions[0:offset_batch_size, 0:t_max-1, 2:3], mask_padding[:,:, 2:3])
+            mse = mse_op(xp.asarray(train_data_batch[0:offset_batch_size, 1:t_max, 0:2]).astype(xp.float32), xp.asarray(x_predictions[0:offset_batch_size, 0:t_max-1, 0:2]).astype(xp.float32), xp.asarray(mask_padding[:,:,0:2]).astype(xp.float32))
+            mse_eos = mse_op(xp.asarray(train_data_batch[0:offset_batch_size, 1:t_max, 2:3]).astype(xp.float32), xp.asarray(x_predictions[0:offset_batch_size, 0:t_max-1, 2:3]).astype(xp.float32), xp.asarray(mask_padding[:,:, 2:3]).astype(xp.float32))
 
             # Update global statistics
             losses_network = xp.copy(loss_network) if losses_network is None else xp.concatenate((losses_network, loss_network), axis=0)
             losses_complex = xp.copy(loss_complex_i.data) if losses_complex is None else xp.concatenate((losses_complex, loss_complex_i.data), axis=0)
             #mse_network = xp.copy(xp.asarray([mse.data])) if mse_network is None else xp.concatenate((mse_network, xp.asarray([mse.data])), axis=0)
             mse_network.append(chainer.cuda.to_cpu(mse.data))
-            mse_eos_network.append(chainer.cuda.to_cpu(mse_eos.data))
+            mse_eos_network.append(chainer.cuda.to_cpu(mse_eos))
 
             model.reset_state()
             logger.info("Mini-batch computation time: {} seconds".format(time.time()-t_sub_epoch_start))
             logger.info("Mean squared error: {}".format(mse.data))
-            logger.info("Mean squared error EOS: {}".format(mse_eos.data))
+            logger.info("Mean squared error EOS: {}".format(mse_eos))
                 
         """ All the training mini-batches have been processed """
         if train_iter.is_new_epoch:
