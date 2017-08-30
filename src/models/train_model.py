@@ -32,7 +32,8 @@ from chainer import link
 
 from net.functions.adaptive_weight_noise import adaptive_weight_noise
 from net.functions.soft_window import soft_window
-from net.functions.mixture_density_outputs import mixture_density_outputs
+#from net.functions.mixture_density_outputs import mixture_density_outputs
+from functions.connection.mixture_density_network import mixture_density_network
 
 INPUT_SIZE = 3 # (x, y, end_of_stroke)
 
@@ -210,7 +211,53 @@ class MixtureDensityOutputs(link.Link):
         )
         
         return self.loss, self.xpred, self.eos, self.pi, self.mux, self.muy, self.sgx, self.sgy, self.rho
+    
+class MixtureDensityNetwork(link.Link):
+    """
+        Mixture-Density-Network layer.
+
+        This is a Mixture-Density-Network layer as a chain. 
+        This is a link that wraps the :func:`~chainer.functions.mixturedensityoutputs` function,
+        and holds a weight matrix ``W`` and optionally a bias vector ``b`` as parameters.
+    
+        Args:
+            mix_size (int): number of mixture components.
+    """
+    
+    def __init__(self, mix_size):
+        super(MixtureDensityNetwork, self).__init__()
+
+        self.mix_size = mix_size
+        self.loss = None
+        self.x_pred = None
+        self.eos = None
+        self.pi = None
+        self.mu_x1 = None
+        self.mu_x2 = None
+        self.s_x1 = None
+        self.s_x2 = None
+        self.rho = None
+    
+    def __call__(self, x, h1, h2, h3, W1, W2, W3, b1, b2, b3, prob_bias):
+        y  = F.linear(h1, W1, b1)
+        y += F.linear(h2, W2, b2)
+        y += F.linear(h3, W3, b3) 
         
+        eos_hat, pi_hat, mu_x1_hat, mu_x2_hat, s_x1_hat, s_x2_hat, rho_hat = F.split_axis(
+            y, np.asarray([1 + i*self.mix_size for i in xrange(5+1)]), axis=1
+        )
+
+        # Transform parameters
+        pi_hat *= (1. + prob_bias)
+        s_x1_hat -= prob_bias
+        s_x2_hat -= prob_bias
+        
+        self.loss, self.x_pred, self.eos, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = mixture_density_network(
+            x, eos_hat, pi_hat, mu_x1_hat, mu_x2_hat, s_x1_hat, s_x2_hat, rho_hat
+        )
+        
+        return self.loss, self.x_pred, self.eos, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho        
+
 
 class LSTM(link.Link):
     """
@@ -277,7 +324,8 @@ class Model(chainer.Chain):
            self.l2 = LSTM(rnn_cells_number)
            self.l3 = LSTM(rnn_cells_number)
 
-           self.ms = MixtureDensityOutputs(mix_comp_number)
+           #self.ms = MixtureDensityOutputs(mix_comp_number)
+           self.ms = MixtureDensityNetwork(mix_comp_number)
 
         self.win_unit_number = win_unit_number
         self.rnn_cells_number = rnn_layers_number
@@ -409,9 +457,8 @@ class Model(chainer.Chain):
         l3_in += self.ws_to_l3
         l3_h = self.l3(l3_in, self.get_awn_weight_link("l3_l3"), self.get_awn_bias_link("l3_l3"))
 
-        # Mixture Density Network
-        loss_network, x_pred, eos, pi, mux, muy, sgx, sgy, rho = self.ms(
-            x_next, self.eow, l1_h, l2_h, l3_h,
+        loss, x_pred, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho = self.ms(
+            x_next, l1_h, l2_h, l3_h,
             self.get_awn_weight_link("l1_ms"),
             self.get_awn_weight_link("l2_ms"),
             self.get_awn_weight_link("l3_ms"),
@@ -420,8 +467,7 @@ class Model(chainer.Chain):
             self.get_awn_bias_link("l3_ms"),
             prob_bias
         )
-
-        return loss_network, x_pred, eos, pi, mux, muy, sgx, sgy, rho, self.loss_complex
+        return loss, x_pred, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho, self.loss_complex
         
 
 # ===============================================
@@ -652,13 +698,16 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             losses_network = xp.copy(loss_network) if losses_network is None else xp.concatenate((losses_network, loss_network), axis=0)
             losses_complex = xp.copy(loss_complex_i.data) if losses_complex is None else xp.concatenate((losses_complex, loss_complex_i.data), axis=0)
             #mse_network = xp.copy(xp.asarray([mse.data])) if mse_network is None else xp.concatenate((mse_network, xp.asarray([mse.data])), axis=0)
-            mse_network.append(chainer.cuda.to_cpu(mse))
-            mse_eos_network.append(chainer.cuda.to_cpu(mse_eos))
+            #mse_network.append(chainer.cuda.to_cpu(mse))
+            mse_network.append(mse)
+            #mse_eos_network.append(chainer.cuda.to_cpu(mse_eos))
+            mse_eos_network.append(mse_eos)
 
             model.reset_state()
             logger.info("Mini-batch computation time: {} seconds".format(time.time()-t_sub_epoch_start))
             logger.info("Mean squared error: {}".format(mse))
             logger.info("Mean squared error EOS: {}".format(mse_eos))
+            logger.info("Iteration loss: {}".format(accum_loss))
                 
         """ All the training mini-batches have been processed """
         if train_iter.is_new_epoch:
