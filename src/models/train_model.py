@@ -457,7 +457,7 @@ class Model(chainer.Chain):
         l3_in += self.ws_to_l3
         l3_h = self.l3(l3_in, self.get_awn_weight_link("l3_l3"), self.get_awn_bias_link("l3_l3"))
 
-        loss, x_pred, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho = self.ms(
+        loss_network, x_pred, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho = self.ms(
             x_next, l1_h, l2_h, l3_h,
             self.get_awn_weight_link("l1_ms"),
             self.get_awn_weight_link("l2_ms"),
@@ -467,7 +467,7 @@ class Model(chainer.Chain):
             self.get_awn_bias_link("l3_ms"),
             prob_bias
         )
-        return loss, x_pred, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho, self.loss_complex
+        return loss_network, x_pred, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho, self.loss_complex
         
 
 # ===============================================
