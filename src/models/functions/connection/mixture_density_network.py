@@ -87,42 +87,17 @@ class MixtureDensityNetworkFunction(function.Function):
 
         """ Sample from the mixture to predict the next position """
         with chainer.no_backprop_mode():
-            # Convert to cpu (@TODO: GPU should be able to handle that)
-            if xp == np:
-                z_mu_x1_cpu = z_mu_x1
-                z_mu_x2_cpu = z_mu_x2
-                z_s_x1_cpu = z_s_x1
-                z_s_x2_cpu = z_s_x2
-                z_rho_cpu = z_rho
-                z_pi_cpu = z_pi
-                z_eos_cpu = z_eos
-            else:
-                #z_mu_x1_cpu = cuda.to_cpu(z_mu_x1)
-                #z_mu_x2_cpu = cuda.to_cpu(z_mu_x2)
-                #z_s_x1_cpu = cuda.to_cpu(z_s_x1)
-                #z_s_x2_cpu = cuda.to_cpu(z_s_x2)
-                #z_rho_cpu = cuda.to_cpu(z_rho)
-                #z_pi_cpu = cuda.to_cpu(z_pi)
-                #z_eos_cpu = cuda.to_cpu(z_eos)
-                z_mu_x1_cpu = cuda.to_cpu(z_mu_x1)
-                z_mu_x2_cpu = cuda.to_cpu(z_mu_x2)
-                z_s_x1_cpu = cuda.to_cpu(z_s_x1)
-                z_s_x2_cpu = cuda.to_cpu(z_s_x2)
-                z_rho_cpu = cuda.to_cpu(z_rho)
-                z_pi_cpu = cuda.to_cpu(z_pi)
-                z_eos_cpu = cuda.to_cpu(z_eos)
-
             x_pred = xp.zeros((x.shape))
 
-            for k in xrange(len(z_pi_cpu)):
+            for k in xrange(len(z_pi)):
                 # Select the most probable id from the mixture
                 treshold_idx = 0.10 # Randomly chosen treshold
-                #idx = xp.argmax(z_pi_cpu[k])
-                idx = z_pi_cpu[k].argmax()
+                #idx = xp.argmax(z_pi[k])
+                idx = z_pi[k].argmax()
                 #summation = 0
                 #idx = -1
-                #for i in xrange(len(z_pi_cpu[k])):
-                #    summation += z_pi_cpu[k][i]
+                #for i in xrange(len(z_pi[k])):
+                #    summation += z_pi[k][i]
                 #    if summation >= treshold_idx:
                 #       idx = i
                 #       break
@@ -131,13 +106,11 @@ class MixtureDensityNetworkFunction(function.Function):
                 #    raise ValueError("Unable to find the maximum index")
 
                 # Get the next x1, x2
-                mean = [z_mu_x1_cpu[k][idx], z_mu_x2_cpu[k][idx]]
-                covar = [[z_s_x1_cpu[k][idx]*z_s_x1_cpu[k][idx], z_rho_cpu[k][idx]*z_s_x1_cpu[k][idx]*z_s_x2_cpu[k][idx]], [z_rho_cpu[k][idx]*z_s_x1_cpu[k][idx]*z_s_x2_cpu[k][idx], z_s_x2_cpu[k][idx]*z_s_x2_cpu[k][idx]]]
+                mean = xp.asarray([z_mu_x1[k][idx], z_mu_x2[k][idx]], dtype=xp.float32)
+                covar = xp.asarray([[z_s_x1[k][idx]*z_s_x1[k][idx], z_rho[k][idx]*z_s_x1[k][idx]*z_s_x2[k][idx]], [z_rho[k][idx]*z_s_x1[k][idx]*z_s_x2[k][idx], z_s_x2[k][idx]*z_s_x2[k][idx]]], dtype=xp.float32)
 
                 # Custom implementation of multivariate normal for CuPy
                 #x_normal = np.random.multivariate_normal(mean, covar, 1)
-                mean = xp.asarray(mean)
-                covar = xp.asarray(covar)
                 shape = [1] # Size of sampling
                 final_shape = list(shape[:])
                 final_shape.append(mean.shape[0])
@@ -155,7 +128,7 @@ class MixtureDensityNetworkFunction(function.Function):
 
                 # Get the next eos
                 treshold_eos = 0.10 # Randomly chosen treshold
-                x3_next = 1 if treshold_eos < z_eos_cpu[k][0] else 0
+                x3_next = 1 if treshold_eos < z_eos[k][0] else 0
 
                 x_pred[k, 0] = x1_next
                 x_pred[k, 1] = x2_next
