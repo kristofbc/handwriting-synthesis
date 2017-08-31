@@ -64,7 +64,7 @@ class MixtureDensityNetworkFunction(function.Function):
         
         # Normal function. Eq. 24.
         inv_ro = 1. - xp.square(z_rho)
-        n_left = 2. * xp.pi * z_s_x1 * z_s_x2 * xp.sqrt(inv_ro)
+        n_left = 2. * np.pi * z_s_x1 * z_s_x2 * xp.sqrt(inv_ro)
         n_right = xp.exp(-z / (2. * inv_ro))
         n = n_right / n_left
 
