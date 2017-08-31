@@ -55,8 +55,8 @@ class MixtureDensityNetworkFunction(function.Function):
         x3 = x[:, 2:3]
         
         # Z variable. Eq. 25
-        norm_x1 = xp.broadcast_to(x1, (z_mu_x1.shape)) - z_mu_x1
-        norm_x2 = xp.broadcast_to(x2, (z_mu_x2.shape)) - z_mu_x2
+        norm_x1 = x1 - z_mu_x1
+        norm_x2 = x2 - z_mu_x2
         z_left = (xp.square(norm_x1)/xp.square(z_s_x1)) + (xp.square(norm_x2)/xp.square(z_s_x2))
         z_right = (2.*z_rho*norm_x1*norm_x2)/(z_s_x1*z_s_x2)
         z = z_left - z_right
@@ -64,7 +64,7 @@ class MixtureDensityNetworkFunction(function.Function):
         
         # Normal function. Eq. 24.
         inv_ro = 1. - xp.square(z_rho)
-        n_left = 2. * np.pi * z_s_x1 * z_s_x2 * xp.sqrt(inv_ro)
+        n_left = 2. * np.pi * z_s_x1 * z_s_x2 * xp.sqrt(inv_ro) + 1e-10 # + 1e-10 for computational stability
         n_right = xp.exp(-z / (2. * inv_ro))
         n = n_right / n_left
 
@@ -75,15 +75,25 @@ class MixtureDensityNetworkFunction(function.Function):
 
         # Sequence loss. Eq. 26
         loss_y = z_pi * n
-        loss_y = xp.sum(loss_y, 1, keepdims=True)
-        epsilon = xp.full(loss_y.shape, 1e-10, dtype=xp.float32)
-        loss_y = xp.maximum(loss_y, epsilon) # Because at the begining loss_y is exactly 0 sometime
+        loss_y = xp.sum(loss_y, 1, keepdims=True) + 1e-10 # + 1e-10 for computational stability, != nan
+        #epsilon = xp.full(loss_y.shape, 1e-10, dtype=xp.float32)
+        #loss_y = xp.maximum(loss_y, epsilon) # Because at the begining loss_y is exactly 0 sometime
         loss_y = -xp.log(loss_y) 
 
-        loss_x = z_eos * x3 + (1. - z_eos) * (1. - x3)
-        loss_x = -xp.log(loss_x)
+        #loss_x = z_eos * x3 + (1. - z_eos) * (1. - x3)
+        #loss_x = -xp.log(loss_x)
+        loss_x = -x3 * xp.log(z_eos) - (1. - x3) * xp.log(1. - z_eos)
 
         loss = loss_y + loss_x
+
+        # Mask guard to check if x3 == 2 (added padding)
+        idx_mask = xp.where(x3==2)[0]
+        mask = xp.ones_like(x3)
+        mask[idx_mask, 0] = 0.
+        self.mask = mask
+        loss *= mask
+
+        return loss, x, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho,
 
         """ Sample from the mixture to predict the next position """
         with chainer.no_backprop_mode():
