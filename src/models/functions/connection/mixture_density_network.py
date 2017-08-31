@@ -174,8 +174,8 @@ class MixtureDensityNetworkFunction(function.Function):
 
         g_eos = (x3 - self.z_eos) * self.mask
         g_pi = (self.z_pi - self.gamma) * self.mask
-        g_mu_x1 = - self.gamma * (C/self.z_s_x1) * (d_norm_x1 - d_rho_norm_x2) * self.mask
-        g_mu_x2 = - self.gamma * (C/self.z_s_x2) * (d_norm_x2 - d_rho_norm_x1) * self.mask
+        g_mu_x1 = - self.gamma * ((C/self.z_s_x1) * (d_norm_x1 - d_rho_norm_x2)) * self.mask
+        g_mu_x2 = - self.gamma * ((C/self.z_s_x2) * (d_norm_x2 - d_rho_norm_x1)) * self.mask
         g_s_x1 = - self.gamma * ((C*d_norm_x1) * (d_norm_x1 - d_rho_norm_x2) - 1.) * self.mask
         g_s_x2 = - self.gamma * ((C*d_norm_x2) * (d_norm_x2 - d_rho_norm_x1) - 1.) * self.mask
         g_rho = - self.gamma * (d_norm_x1*d_norm_x2 + self.z_rho*(1. - C * self.z)) * self.mask
