@@ -97,20 +97,28 @@ class MixtureDensityNetworkFunction(function.Function):
                 z_pi_cpu = z_pi
                 z_eos_cpu = z_eos
             else:
-                z_mu_x1_cpu = cuda.to_cpu(z_mu_x1.data)
-                z_mu_x2_cpu = cuda.to_cpu(z_mu_x2.data)
-                z_s_x1_cpu = cuda.to_cpu(z_s_x1.data)
-                z_s_x2_cpu = cuda.to_cpu(z_s_x2.data)
-                z_rho_cpu = cuda.to_cpu(z_rho.data)
-                z_pi_cpu = cuda.to_cpu(z_pi.data)
-                z_eos_cpu = cuda.to_cpu(z_eos.data)
+                #z_mu_x1_cpu = cuda.to_cpu(z_mu_x1)
+                #z_mu_x2_cpu = cuda.to_cpu(z_mu_x2)
+                #z_s_x1_cpu = cuda.to_cpu(z_s_x1)
+                #z_s_x2_cpu = cuda.to_cpu(z_s_x2)
+                #z_rho_cpu = cuda.to_cpu(z_rho)
+                #z_pi_cpu = cuda.to_cpu(z_pi)
+                #z_eos_cpu = cuda.to_cpu(z_eos)
+                z_mu_x1_cpu = cuda.to_cpu(z_mu_x1)
+                z_mu_x2_cpu = cuda.to_cpu(z_mu_x2)
+                z_s_x1_cpu = cuda.to_cpu(z_s_x1)
+                z_s_x2_cpu = cuda.to_cpu(z_s_x2)
+                z_rho_cpu = cuda.to_cpu(z_rho)
+                z_pi_cpu = cuda.to_cpu(z_pi)
+                z_eos_cpu = cuda.to_cpu(z_eos)
 
             x_pred = xp.zeros((x.shape))
 
             for k in xrange(len(z_pi_cpu)):
                 # Select the most probable id from the mixture
                 treshold_idx = 0.10 # Randomly chosen treshold
-                idx = xp.argmax(z_pi_cpu[k])
+                #idx = xp.argmax(z_pi_cpu[k])
+                idx = z_pi_cpu[k].argmax()
                 #summation = 0
                 #idx = -1
                 #for i in xrange(len(z_pi_cpu[k])):
@@ -125,7 +133,24 @@ class MixtureDensityNetworkFunction(function.Function):
                 # Get the next x1, x2
                 mean = [z_mu_x1_cpu[k][idx], z_mu_x2_cpu[k][idx]]
                 covar = [[z_s_x1_cpu[k][idx]*z_s_x1_cpu[k][idx], z_rho_cpu[k][idx]*z_s_x1_cpu[k][idx]*z_s_x2_cpu[k][idx]], [z_rho_cpu[k][idx]*z_s_x1_cpu[k][idx]*z_s_x2_cpu[k][idx], z_s_x2_cpu[k][idx]*z_s_x2_cpu[k][idx]]]
-                x_normal = np.random.multivariate_normal(mean, covar, 1)
+
+                # Custom implementation of multivariate normal for CuPy
+                #x_normal = np.random.multivariate_normal(mean, covar, 1)
+                mean = xp.asarray(mean)
+                covar = xp.asarray(covar)
+                shape = [1] # Size of sampling
+                final_shape = list(shape[:])
+                final_shape.append(mean.shape[0])
+                x_normal = xp.random.standard_normal(final_shape).reshape(-1, mean.shape[0])
+                
+                # Decompose the matrix, Singular Value Decomposition
+                (u, s, v) = xp.linalg.svd(covar)
+
+                x_normal = xp.dot(x_normal, xp.sqrt(s)[:, None] * v)
+                x_normal += mean
+                x_normal = xp.reshape(x_normal, tuple(final_shape))
+
+                # Sample from the distribution the next values
                 x1_next, x2_next = x_normal[0][0], x_normal[0][1]
 
                 # Get the next eos
@@ -136,8 +161,6 @@ class MixtureDensityNetworkFunction(function.Function):
                 x_pred[k, 1] = x2_next
                 x_pred[k, 2] = x3_next
 
-        print(loss, xp.sum(loss))
-        exit()
         return loss, x_pred, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho,
 
     def backward(self, inputs, grad_outputs):
