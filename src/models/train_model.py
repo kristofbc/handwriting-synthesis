@@ -761,8 +761,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             def mse_op(true, pred, mask_true, mask_pred):
                 return xp.sum(xp.square(true*mask_true - pred*mask_pred))/pred.shape[1]
 
-            mse = mse_op(xp.asarray(train_data_batch[0:offset_batch_size, mse_index_sampling+1, 0:2]).astype(xp.float32), xp.asarray(x_predictions[0:offset_batch_size, :, 0:2]).astype(xp.float32), xp.asarray(mask_padding[:,mse_index_sampling+1,0:2]).astype(xp.float32), xp.asarray(mask_padding[:, mse_index_sampling, 0:2]).astype(xp.float32))
-            mse_eos = mse_op(xp.asarray(train_data_batch[0:offset_batch_size, mse_index_sampling+1, 2:3]).astype(xp.float32), xp.asarray(x_predictions[0:offset_batch_size, :, 2:3]).astype(xp.float32), xp.asarray(mask_padding[:,mse_index_sampling+1, 2:3]).astype(xp.float32), xp.asarray(mask_padding[:, mse_index_sampling, 2:3]).astype(xp.float32))
+            mse = mse_op(xp.asarray(train_data_batch[:, :, 0:2]).astype(xp.float32).take(mse_index_sampling+1, axis=1), x_predictions[:,:,0:2], mask_padding[:,:,0:2].take(mse_index_sampling+1, axis=1), mask_padding[:,:,0:2].take(mse_index_sampling, axis=1))
+            mse_eos = mse_op(xp.asarray(train_data_batch[:, :, 2:3]).astype(xp.float32).take(mse_index_sampling+1, axis=1), x_predictions[:,:,2:3], mask_padding[:,:,2:3].take(mse_index_sampling+1, axis=1), mask_padding[:,:,2:3].take(mse_index_sampling, axis=1))
 
             # Update global statistics
             losses_network = xp.copy(loss_network) if losses_network is None else xp.concatenate((losses_network, loss_network), axis=0)
