@@ -732,11 +732,11 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             accum_mse_network_train[epoch, 3] = mse_network_cpu.max()
             accum_mse_network_train[epoch, 4] = np.median(mse_network_cpu)
 
-            accum_mse_eos_network_train[epoch, 0] = mse_network_cpu.mean()
-            accum_mse_eos_network_train[epoch, 1] = mse_network_cpu.std()
-            accum_mse_eos_network_train[epoch, 2] = mse_network_cpu.min()
-            accum_mse_eos_network_train[epoch, 3] = mse_network_cpu.max()
-            accum_mse_eos_network_train[epoch, 4] = np.median(mse_network_cpu)
+            accum_mse_eos_network_train[epoch, 0] = mse_eos_network_cpu.mean()
+            accum_mse_eos_network_train[epoch, 1] = mse_eos_network_cpu.std()
+            accum_mse_eos_network_train[epoch, 2] = mse_eos_network_cpu.min()
+            accum_mse_eos_network_train[epoch, 3] = mse_eos_network_cpu.max()
+            accum_mse_eos_network_train[epoch, 4] = np.median(mse_eos_network_cpu)
 
             elapsed_time = time.time() - t_epoch_start
 
