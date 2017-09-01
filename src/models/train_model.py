@@ -76,6 +76,71 @@ def get_padded_data(train_data, train_characters, padding=True):
     
     return np.asarray(tmp1), np.asarray(tmp2)
 
+def sample_from_mdn(z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho, xp=np):
+    """
+        Sample from a Mixture Density Network
+
+        Args:
+            z_eos (array): end-of-stroke probability
+            z_pi (array): mixture
+            z_mu_x1 (array): mean of x1
+            z_mu_x2 (array): mean of x2
+            z_s_x1 (array): variance of x1
+            z_s_x2 (array): variance of x2
+            z_rho (array): coef of the distribution
+            xp (numpy|cupy): computation engine
+        Returns:
+            x_pred (array): the prediction of the next position
+    """
+    x_pred = xp.zeros((len(z_pi), 3))
+
+    for k in xrange(len(z_pi)):
+        # Select the most probable id from the mixture
+        #treshold_idx = 0.10 # Randomly chosen treshold
+        #idx = xp.argmax(z_pi[k])
+        idx = z_pi[k].argmax()
+        #summation = 0
+        #idx = -1
+        #for i in xrange(len(z_pi[k])):
+        #    summation += z_pi[k][i]
+        #    if summation >= treshold_idx:
+        #       idx = i
+        #       break
+
+        #if idx == -1:
+        #    raise ValueError("Unable to find the maximum index")
+
+        # Get the next x1, x2
+        mean = xp.asarray([z_mu_x1[k][idx], z_mu_x2[k][idx]], dtype=xp.float32)
+        covar = xp.asarray([[z_s_x1[k][idx]*z_s_x1[k][idx], z_rho[k][idx]*z_s_x1[k][idx]*z_s_x2[k][idx]], [z_rho[k][idx]*z_s_x1[k][idx]*z_s_x2[k][idx], z_s_x2[k][idx]*z_s_x2[k][idx]]], dtype=xp.float32)
+
+        # Custom implementation of multivariate normal for CuPy
+        #x_normal = np.random.multivariate_normal(mean, covar, 1)
+        shape = [1] # Size of sampling
+        final_shape = list(shape[:])
+        final_shape.append(mean.shape[0])
+        x_normal = xp.random.standard_normal(final_shape).reshape(-1, mean.shape[0])
+        
+        # Decompose the matrix, Singular Value Decomposition
+        (u, s, v) = xp.linalg.svd(covar)
+
+        x_normal = xp.dot(x_normal, xp.sqrt(s)[:, None] * v)
+        x_normal += mean
+        x_normal = xp.reshape(x_normal, tuple(final_shape))
+
+        # Sample from the distribution the next values
+        x1_next, x2_next = x_normal[0][0], x_normal[0][1]
+
+        # Get the next eos
+        treshold_eos = 0.10 # Randomly chosen treshold
+        x3_next = 1 if treshold_eos < z_eos[k][0] else 0
+
+        x_pred[k, 0] = x1_next
+        x_pred[k, 1] = x2_next
+        x_pred[k, 2] = x3_next
+
+    return x_pred
+
 # ================
 # Functions (fcts)
 # ================
@@ -633,6 +698,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
             mse = None # MSE on x_pred
             mse_eos = None # MSE on eos
+            mse_sampling_count = 10
+            mse_index_sampling = xp.arange(0, t_max, int(round(t_max/mse_sampling_count)))
 
             x_predictions = None
             for t in xrange(t_max-1):
@@ -646,11 +713,14 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                 local_update_weight = update_weight if t == 0 else False
                 #loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, local_update_weight)
                 x = [x_now, x_next, cs, ls, prob_bias, n_batches]
-                loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, local_update_weight)
+                loss_i, _, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, local_update_weight)
 
-                # MSE on x_pred
-                x_pred = F.expand_dims(x_pred, axis=1)
-                x_predictions = x_pred.data if x_predictions is None else xp.concatenate((x_predictions, x_pred.data), axis=1)
+                if t in mse_index_sampling:
+                    # MSE on x_pred
+                    with chainer.no_backprop_mode():
+                        x_pred = sample_from_mdn(eos_i.data, pi_i.data, mux_i.data, muy_i.data, sgx_i.data, sgy_i.data, rho_i.data, xp)
+                        x_pred = F.expand_dims(x_pred, axis=1)
+                        x_predictions = x_pred.data if x_predictions is None else xp.concatenate((x_predictions, x_pred.data), axis=1)
 
                 # Get stats
                 accum_loss += F.sum(loss_i)/offset_batch_size
@@ -688,11 +758,11 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                     if train_data_batch[m][n][2] == 2:
                         mask_padding[m][n] = xp.zeros((3))
 
-            def mse_op(true, pred, mask):
-                return xp.sum(xp.square(true*mask - pred*mask))/pred.shape[1]
+            def mse_op(true, pred, mask_true, mask_pred):
+                return xp.sum(xp.square(true*mask_true - pred*mask_pred))/pred.shape[1]
 
-            mse = mse_op(xp.asarray(train_data_batch[0:offset_batch_size, 1:t_max, 0:2]).astype(xp.float32), xp.asarray(x_predictions[0:offset_batch_size, 0:t_max-1, 0:2]).astype(xp.float32), xp.asarray(mask_padding[:,:,0:2]).astype(xp.float32))
-            mse_eos = mse_op(xp.asarray(train_data_batch[0:offset_batch_size, 1:t_max, 2:3]).astype(xp.float32), xp.asarray(x_predictions[0:offset_batch_size, 0:t_max-1, 2:3]).astype(xp.float32), xp.asarray(mask_padding[:,:, 2:3]).astype(xp.float32))
+            mse = mse_op(xp.asarray(train_data_batch[0:offset_batch_size, mse_index_sampling+1, 0:2]).astype(xp.float32), xp.asarray(x_predictions[0:offset_batch_size, :, 0:2]).astype(xp.float32), xp.asarray(mask_padding[:,mse_index_sampling+1,0:2]).astype(xp.float32), xp.asarray(mask_padding[:, mse_index_sampling, 0:2]).astype(xp.float32))
+            mse_eos = mse_op(xp.asarray(train_data_batch[0:offset_batch_size, mse_index_sampling+1, 2:3]).astype(xp.float32), xp.asarray(x_predictions[0:offset_batch_size, :, 2:3]).astype(xp.float32), xp.asarray(mask_padding[:,mse_index_sampling+1, 2:3]).astype(xp.float32), xp.asarray(mask_padding[:, mse_index_sampling, 2:3]).astype(xp.float32))
 
             # Update global statistics
             losses_network = xp.copy(loss_network) if losses_network is None else xp.concatenate((losses_network, loss_network), axis=0)
