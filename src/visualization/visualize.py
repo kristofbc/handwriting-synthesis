@@ -92,7 +92,7 @@ def plot_data(coordinate, box=[], plt_inst=None, **kwargs):
 
     return plt_inst
 
-def plot_loss_networks(train_network, valid_network, x_label="Epoch", y_label="Loss", title="Network loss"):
+def plot_loss_networks(train_network, valid_network, x_label="Epoch", y_label="Loss", title="Network loss", legend_train_label="Train", legend_valid_label="Test"):
     """
         Plot multiple loss networks on the same graph
 
@@ -126,9 +126,9 @@ def plot_loss_networks(train_network, valid_network, x_label="Epoch", y_label="L
     )
 
     if len(coord_network_train) > 0:
-        plot_data(coord_network_train, box_network_train, plt, label="Train")
+        plot_data(coord_network_train, box_network_train, plt, label=legend_train_label)
     if len(coord_network_valid) > 0:
-        plot_data(coord_network_valid, box_network_valid, plt, label="Test")
+        plot_data(coord_network_valid, box_network_valid, plt, label=legend_valid_label)
 
     plt.legend(ncol=2 if len(coord_network_train) > 0 and len(coord_network_valid) > 0 else 1, loc="upper right", fontsize=10)
 
@@ -164,9 +164,16 @@ def main(model_name, models_dir, output_path):
     loss_network_valid = None
     if os.path.exists(model_path + "/loss_network_valid.npy"):
         loss_network_valid = np.load(model_path + "/loss_network_valid.npy")
+    # MSE
+    mse_network_train = None
+    if os.path.exists(model_path + "/mse_network_train.npy"):
+        mse_network_train = np.load(model_path + "/mse_network_train.npy")
+    mse_eos_network_train = None
+    if os.path.exists(model_path + "/mse_eos_network_train.npy"):
+        mse_eos_network_train = np.load(model_path + "/mse_eos_network_train.npy")
 
     """ Generate the loss curves """
-    if loss_network_train is None and loss_complex_train is None and loss_network_valid is None:
+    if loss_network_train is None and loss_complex_train is None and loss_network_valid is None and mse_network_train is None and mse_eos_network_train is None:
         raise RuntimeError("Unable to generate the figures: no values found")
 
     # Extract the coordinate of the losses
@@ -174,6 +181,13 @@ def main(model_name, models_dir, output_path):
     #plt_inst.show()
     iteration_number = len(loss_network_train) if len(loss_network_train) > 0 else len(loss_network_valid)
     plt_inst.savefig(output_path + "/" + model_name + "-iteration-{}".format(iteration_number) + ".png")
+
+    # Extract the MSE curve
+    plt.cla()
+    plt.clf()
+    #plt_inst = plot_loss_networks(mse_network_train if mse_network_train is not None else [], mse_eos_network_train if mse_eos_network_train is not None else [], y_label="MSE", title="MSE")
+    plt_inst = plot_loss_networks(mse_network_train if mse_network_train is not None else [], [], y_label="MSE", title="MSE", legend_train_label="MSE")
+    plt_inst.show()
 
 # ======================
 # CLI entry point (clie)

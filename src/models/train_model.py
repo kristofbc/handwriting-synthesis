@@ -32,8 +32,8 @@ from chainer import link
 
 from net.functions.adaptive_weight_noise import adaptive_weight_noise
 from net.functions.soft_window import soft_window
-#from net.functions.mixture_density_outputs import mixture_density_outputs
-from functions.connection.mixture_density_network import mixture_density_network
+from net.functions.mixture_density_outputs import mixture_density_outputs
+#from functions.connection.mixture_density_network import mixture_density_network
 
 INPUT_SIZE = 3 # (x, y, end_of_stroke)
 
@@ -389,8 +389,8 @@ class Model(chainer.Chain):
            self.l2 = LSTM(rnn_cells_number)
            self.l3 = LSTM(rnn_cells_number)
 
-           #self.ms = MixtureDensityOutputs(mix_comp_number)
-           self.ms = MixtureDensityNetwork(mix_comp_number)
+           self.ms = MixtureDensityOutputs(mix_comp_number)
+           #self.ms = MixtureDensityNetwork(mix_comp_number)
 
         self.win_unit_number = win_unit_number
         self.rnn_cells_number = rnn_layers_number
@@ -523,7 +523,7 @@ class Model(chainer.Chain):
         l3_h = self.l3(l3_in, self.get_awn_weight_link("l3_l3"), self.get_awn_bias_link("l3_l3"))
 
         loss_network, x_pred, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho = self.ms(
-            x_next, l1_h, l2_h, l3_h,
+            x_next, self.eow, l1_h, l2_h, l3_h,
             self.get_awn_weight_link("l1_ms"),
             self.get_awn_weight_link("l2_ms"),
             self.get_awn_weight_link("l3_ms"),
