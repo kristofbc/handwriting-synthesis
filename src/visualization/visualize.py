@@ -187,7 +187,7 @@ def main(model_name, models_dir, output_path):
     plt.clf()
     #plt_inst = plot_loss_networks(mse_network_train if mse_network_train is not None else [], mse_eos_network_train if mse_eos_network_train is not None else [], y_label="MSE", title="MSE")
     plt_inst = plot_loss_networks(mse_network_train if mse_network_train is not None else [], [], y_label="MSE", title="MSE", legend_train_label="MSE")
-    plt_inst.show()
+    plt_inst.savefig(output_path + "/" + model_name + "-iteration-mse-{}".format(iteration_number) + ".png")
 
 # ======================
 # CLI entry point (clie)
