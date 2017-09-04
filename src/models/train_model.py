@@ -111,25 +111,35 @@ def sample_from_mdn(z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho, xp=np)
         #    raise ValueError("Unable to find the maximum index")
 
         # Get the next x1, x2
-        mean = xp.asarray([z_mu_x1[k][idx], z_mu_x2[k][idx]], dtype=xp.float32)
-        covar = xp.asarray([[z_s_x1[k][idx]*z_s_x1[k][idx], z_rho[k][idx]*z_s_x1[k][idx]*z_s_x2[k][idx]], [z_rho[k][idx]*z_s_x1[k][idx]*z_s_x2[k][idx], z_s_x2[k][idx]*z_s_x2[k][idx]]], dtype=xp.float32)
+        try:
+            mean = xp.asarray([z_mu_x1[k][idx], z_mu_x2[k][idx]], dtype=xp.float32)
+            covar = xp.asarray([[z_s_x1[k][idx]*z_s_x1[k][idx], z_rho[k][idx]*z_s_x1[k][idx]*z_s_x2[k][idx]], [z_rho[k][idx]*z_s_x1[k][idx]*z_s_x2[k][idx], z_s_x2[k][idx]*z_s_x2[k][idx]]], dtype=xp.float32)
 
-        # Custom implementation of multivariate normal for CuPy
-        #x_normal = np.random.multivariate_normal(mean, covar, 1)
-        shape = [1] # Size of sampling
-        final_shape = list(shape[:])
-        final_shape.append(mean.shape[0])
-        x_normal = xp.random.standard_normal(final_shape).reshape(-1, mean.shape[0])
-        
-        # Decompose the matrix, Singular Value Decomposition
-        (u, s, v) = xp.linalg.svd(covar)
+            # Custom implementation of multivariate normal for CuPy
+            #x_normal = np.random.multivariate_normal(mean, covar, 1)
+            shape = [1] # Size of sampling
+            final_shape = list(shape[:])
+            final_shape.append(mean.shape[0])
+            x_normal = xp.random.standard_normal(final_shape).reshape(-1, mean.shape[0])
+            
+            # Decompose the matrix, Singular Value Decomposition
+            (u, s, v) = xp.linalg.svd(covar)
 
-        x_normal = xp.dot(x_normal, xp.sqrt(s)[:, None] * v)
-        x_normal += mean
-        x_normal = xp.reshape(x_normal, tuple(final_shape))
+            x_normal = xp.dot(x_normal, xp.sqrt(s)[:, None] * v)
+            x_normal += mean
+            x_normal = xp.reshape(x_normal, tuple(final_shape))
 
-        # Sample from the distribution the next values
-        x1_next, x2_next = x_normal[0][0], x_normal[0][1]
+            # Sample from the distribution the next values
+            x1_next, x2_next = x_normal[0][0], x_normal[0][1]
+        except:
+            mean = np.asarray([cuda.to_cpu(z_mu_x1[k][idx]), cuda.to_cpu(z_mu_x2[k][idx]]), dtype=xp.float32)
+            covar = np.asarray([[cuda.to_cpu(z_s_x1[k][idx])*cuda.to_cpu(z_s_x1[k][idx]), cuda.to_cpu(z_rho[k][idx])*cuda.to_cpu(z_s_x1[k][idx])*cuda.to_cpu(z_s_x2[k][idx])], [cuda.to_cpu(z_rho[k][idx])*cuda.to_cpu(z_s_x1[k][idx])*cuda.to_cpu(z_s_x2[k][idx]), cuda.to_cpu(z_s_x2[k][idx])*cuda.to_cpu(z_s_x2[k][idx])]], dtype=xp.float32)
+            x_normal = np.random.multivariate_normal(mean, covar, 1)
+
+            x_normal = xp.asarray(x_normal)
+            # Sample from the distribution the next values
+            x1_next, x2_next = x_normal[0][0], x_normal[0][1]
+
 
         # Get the next eos
         treshold_eos = 0.10 # Randomly chosen treshold
