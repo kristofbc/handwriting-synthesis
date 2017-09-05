@@ -62,6 +62,13 @@ class MixtureDensityNetworkFunction(function.Function):
         z_right = (2.*z_rho*norm_x1*norm_x2)/(z_s_x1*z_s_x2)
         z = z_left - z_right
         self.z = z
+
+        # Safety check for NaN
+        if chainer.is_debug() and xp.any(xp.isnan(z_left)):
+            raise ValueError("z_left is nan")
+
+        if chainer.is_debug() and xp.any(xp.isnan(z_right)):
+            raise ValueError("z_right is nan")
         
         # Normal function. Eq. 24.
         inv_ro = 1. - xp.square(z_rho)
@@ -69,7 +76,7 @@ class MixtureDensityNetworkFunction(function.Function):
         n_right = xp.exp(-z / (2. * inv_ro))
 
         # Safety check for NaN
-        if xp.isnan(n_right):
+        if chainer.is_debug() and xp.any(xp.isnan(n_right)):
             raise ValueError("n_right is nan")
 
         n = n_right / n_left
@@ -79,7 +86,7 @@ class MixtureDensityNetworkFunction(function.Function):
         gamma = gamma / (xp.sum(gamma, 1, keepdims=True) + 1e-10) # sum + 1e-10 for computational stability, != nan!
 
         # Safety check for NaN
-        if xp.isnan(gamma):
+        if chainer.is_debug() and xp.any(xp.isnan(gamma)):
             raise ValueError("gamma is nan")
 
         self.gamma = gamma
@@ -92,7 +99,7 @@ class MixtureDensityNetworkFunction(function.Function):
         loss_y = -xp.log(loss_y) 
 
         # Safety check for NaN
-        if xp.isnan(loss_y):
+        if chainer.is_debug() and xp.any(xp.isnan(loss_y)):
             raise ValueError("loss_y is nan")
 
         #loss_x = z_eos * x3 + (1. - z_eos) * (1. - x3)
