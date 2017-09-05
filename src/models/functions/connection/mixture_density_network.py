@@ -1,3 +1,4 @@
+import math
 import chainer
 import chainer.functions
 
@@ -66,11 +67,21 @@ class MixtureDensityNetworkFunction(function.Function):
         inv_ro = 1. - xp.square(z_rho)
         n_left = 2. * np.pi * z_s_x1 * z_s_x2 * xp.sqrt(inv_ro) + 1e-10 # + 1e-10 for computational stability
         n_right = xp.exp(-z / (2. * inv_ro))
+
+        # Safety check for NaN
+        if math.isnan(n_right):
+            raise ValueError("n_right is nan")
+
         n = n_right / n_left
 
         # Gamma parameter (for the backward phase). Eq. 28-29
         gamma = z_pi * n
         gamma = gamma / (xp.sum(gamma, 1, keepdims=True) + 1e-10) # sum + 1e-10 for computational stability, != nan!
+
+        # Safety check for NaN
+        if math.isnan(gamma):
+            raise ValueError("gamma is nan")
+
         self.gamma = gamma
 
         # Sequence loss. Eq. 26
@@ -79,6 +90,10 @@ class MixtureDensityNetworkFunction(function.Function):
         #epsilon = xp.full(loss_y.shape, 1e-10, dtype=xp.float32)
         #loss_y = xp.maximum(loss_y, epsilon) # Because at the begining loss_y is exactly 0 sometime
         loss_y = -xp.log(loss_y) 
+
+        # Safety check for NaN
+        if math.isnan(loss_y):
+            raise ValueError("loss_y is nan")
 
         #loss_x = z_eos * x3 + (1. - z_eos) * (1. - x3)
         #loss_x = -xp.log(loss_x)
