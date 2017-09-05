@@ -190,24 +190,42 @@ class MixtureDensityNetworkFunction(function.Function):
         g_mu_x1 = xp.empty_like(mu_x1_input)
         g_mu_x2 = xp.empty_like(mu_x2_input)
 
+        # If the gradient was not given
+        if g_eos is None:
+            g_eos = 0.
+        if g_s_x1 is None:
+            g_s_x1 = 0.
+        if g_s_x2 is None:
+            g_s_x2 = 0.
+        if g_rho is None:
+            g_rho = 0.
+        if g_pi is None:
+            g_pi = 0.
+        if g_mu_x1 is None:
+            g_mu_x1 = 0.
+        if g_mu_x2 is None:
+            g_mu_x2 = 0.
+
         # Compute the gradient
         x1 = x[:, 0:1]
         x2 = x[:, 1:2]
         x3 = x[:, 2:3]
 
         # From eq. 27 to 37
-        C = 1. / (1. - rho_input*rho_input)
+        C = 1. / (1. - self.z_rho*self.z_rho)
         d_norm_x1 = (x1 - self.z_mu_x1) / self.z_s_x1
         d_norm_x2 = (x2 - self.z_mu_x2) / self.z_s_x2
         d_rho_norm_x1 = self.z_rho * d_norm_x1
         d_rho_norm_x2 = self.z_rho * d_norm_x2
+        C_d_rho_norm_x1 = C * (d_norm_x1 - d_rho_norm_x2) / self.z_s_x1
+        C_d_rho_norm_x2 = C * (d_norm_x2 - d_rho_norm_x1) / self.z_s_x2
 
         g_eos = (x3 - self.z_eos) * self.mask
         g_pi = (self.z_pi - self.gamma) * self.mask
-        g_mu_x1 = - self.gamma * ((C/self.z_s_x1) * (d_norm_x1 - d_rho_norm_x2)) * self.mask
-        g_mu_x2 = - self.gamma * ((C/self.z_s_x2) * (d_norm_x2 - d_rho_norm_x1)) * self.mask
-        g_s_x1 = - self.gamma * ((C*d_norm_x1) * (d_norm_x1 - d_rho_norm_x2) - 1.) * self.mask
-        g_s_x2 = - self.gamma * ((C*d_norm_x2) * (d_norm_x2 - d_rho_norm_x1) - 1.) * self.mask
+        g_mu_x1 = - self.gamma * C_d_rho_norm_x1 * self.mask
+        g_mu_x2 = - self.gamma * C_d_rho_norm_x2 * self.mask
+        g_s_x1 = - self.gamma * ((C_d_rho_norm_x1 * (x1 - self.z_mu_x1)) - 1.) * self.mask
+        g_s_x2 = - self.gamma * ((C_d_rho_norm_x2 * (x2 - self.z_mu_x2)) - 1.) * self.mask
         g_rho = - self.gamma * (d_norm_x1*d_norm_x2 + self.z_rho*(1. - C * self.z)) * self.mask
         
         # Add grad_clipping here if it explodes P.23
