@@ -69,7 +69,7 @@ class MixtureDensityNetworkFunction(function.Function):
         n_right = xp.exp(-z / (2. * inv_ro))
 
         # Safety check for NaN
-        if math.isnan(n_right):
+        if xp.isnan(n_right):
             raise ValueError("n_right is nan")
 
         n = n_right / n_left
@@ -79,7 +79,7 @@ class MixtureDensityNetworkFunction(function.Function):
         gamma = gamma / (xp.sum(gamma, 1, keepdims=True) + 1e-10) # sum + 1e-10 for computational stability, != nan!
 
         # Safety check for NaN
-        if math.isnan(gamma):
+        if xp.isnan(gamma):
             raise ValueError("gamma is nan")
 
         self.gamma = gamma
@@ -92,7 +92,7 @@ class MixtureDensityNetworkFunction(function.Function):
         loss_y = -xp.log(loss_y) 
 
         # Safety check for NaN
-        if math.isnan(loss_y):
+        if xp.isnan(loss_y):
             raise ValueError("loss_y is nan")
 
         #loss_x = z_eos * x3 + (1. - z_eos) * (1. - x3)
