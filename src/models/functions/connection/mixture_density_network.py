@@ -106,6 +106,10 @@ class MixtureDensityNetworkFunction(function.Function):
         #loss_x = -xp.log(loss_x)
         loss_x = -x3 * xp.log(z_eos) - (1. - x3) * xp.log(1. - z_eos)
 
+        # Safety check for NaN
+        if chainer.is_debug() and xp.any(xp.isnan(loss_x)):
+            raise ValueError("loss_x is nan")
+
         loss = loss_y + loss_x
 
         # Mask guard to check if x3 == 2 (added padding)
@@ -114,6 +118,10 @@ class MixtureDensityNetworkFunction(function.Function):
         mask[idx_mask, 0] = 0.
         self.mask = mask
         loss *= mask
+
+        # Safety check for NaN
+        if chainer.is_debug() and xp.any(xp.isnan(loss)):
+            raise ValueError("loss is nan")
 
         return loss, x, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho,
 
