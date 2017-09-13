@@ -178,7 +178,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
 
     #n_chars = len(vocabulary)
     # @TODO: character size should be dynamic (83 is the length of the current data)
-    n_chars = 83
+    n_chars = 81
     n_max_seq_length = get_max_sequence_length(train_characters)
     
     """ Import the trained model """

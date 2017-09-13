@@ -133,7 +133,7 @@ def sample_from_mdn(z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho, xp=np)
             x1_next, x2_next = x_normal[0][0], x_normal[0][1]
         except:
             mean = np.asarray([cuda.to_cpu(z_mu_x1[k][idx]), cuda.to_cpu(z_mu_x2[k][idx])], dtype=xp.float32)
-            covar = np.asarray([[cuda.to_cpu(z_s_x1[k][idx])*cuda.to_cpu(z_s_x1[k][idx]), cuda.to_cpu(z_rho[k][idx])*cuda.to_cpu(z_s_x1[k][idx])*cuda.to_cpu(z_s_x2[k][idx])], [cuda.to_cpu(z_rho[k][idx])*cuda.to_cpu(z_s_x1[k][idx])*cuda.to_cpu(z_s_x2[k][idx]), cuda.to_cpu(z_s_x2[k][idx])*cuda.to_cpu(z_s_x2[k][idx])]], dtype=xp.float32)
+            covar = np.asarray([[cuda.to_cpu(z_s_x1[k][idx])*cuda.to_cpu(z_s_x1[k][idx]), cuda.to_cpu(z_rho[k][idx])*cuda.to_cpu(z_s_x1[k][idx])*cuda.to_cpu(z_s_x2[k][idx])], [cuda.to_cpu(z_rho[k][idx])*cuda.to_cpu(z_s_x1[k][idx])*cuda.to_cpu(z_s_x2[k][idx]), cuda.to_cpu(z_s_x2[k][idx])*cuda.to_cpu(z_s_x2[k][idx])]], dtype=np.float32)
             x_normal = np.random.multivariate_normal(mean, covar, 1)
 
             x_normal = xp.asarray(x_normal)
