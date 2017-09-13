@@ -40,106 +40,6 @@ INPUT_SIZE = 3 # (x, y, end_of_stroke)
 # ==============
 # Helpers (hlps)
 # ==============
-def load_data(path):
-    f = open(path, "rb")
-    data = pickle.load(f)
-    f.close()
-    return data
-
-def get_max_sequence_length(sequences):
-    length = []
-    for i in xrange(len(sequences)):
-        length.extend([sequences[i].size])
-    return int(np.asarray(length).max())
-
-def get_padded_data(train_data, train_characters, padding=True):
-    max_length_data = 0
-    max_length_characters = 0
-    # Get the maximum length of each arrays
-    tmp1 = []
-    tmp2 = []
-    for i in xrange(len(train_data)):
-        if len(train_data[i]) > max_length_data:
-            max_length_data = len(train_data[i])
-        #if len(train_characters[i]) > max_length_characters:
-        #    max_length_characters = len(train_characters[i])
-
-    # Pad each arrays to be the same length
-    for i in xrange(len(train_data)):
-        if padding and len(train_data[i]) != max_length_data:
-            pad_length = max_length_data-len(train_data[i])
-            pad = np.full((pad_length, 3), 0)
-            pad[:,2] = 2.0
-            train_data[i] = np.vstack([train_data[i], pad])
-        tmp1.append(np.asarray(train_data[i]))
-        tmp2.append(np.asarray(train_characters[i]))
-    
-    return np.asarray(tmp1), np.asarray(tmp2)
-
-def sample_from_mdn(z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho, xp=np):
-    """
-        Sample from a Mixture Density Network
-
-        Args:
-            z_eos (array): end-of-stroke probability
-            z_pi (array): mixture
-            z_mu_x1 (array): mean of x1
-            z_mu_x2 (array): mean of x2
-            z_s_x1 (array): variance of x1
-            z_s_x2 (array): variance of x2
-            z_rho (array): coef of the distribution
-            xp (numpy|cupy): computation engine
-        Returns:
-            x_pred (array): the prediction of the next position
-    """
-    x_pred = xp.zeros((len(z_pi), 3))
-
-    for k in xrange(len(z_pi)):
-        # Select the most probable id from the mixture
-        #treshold_idx = 0.10 # Randomly chosen treshold
-        #idx = xp.argmax(z_pi[k])
-        idx = z_pi[k].argmax()
-        #summation = 0
-        #idx = -1
-        #for i in xrange(len(z_pi[k])):
-        #    summation += z_pi[k][i]
-        #    if summation >= treshold_idx:
-        #       idx = i
-        #       break
-
-        #if idx == -1:
-        #    raise ValueError("Unable to find the maximum index")
-
-        # Get the next x1, x2
-        mean = xp.asarray([z_mu_x1[k][idx], z_mu_x2[k][idx]], dtype=xp.float32)
-        covar = xp.asarray([[z_s_x1[k][idx]*z_s_x1[k][idx], z_rho[k][idx]*z_s_x1[k][idx]*z_s_x2[k][idx]], [z_rho[k][idx]*z_s_x1[k][idx]*z_s_x2[k][idx], z_s_x2[k][idx]*z_s_x2[k][idx]]], dtype=xp.float32)
-
-        # Custom implementation of multivariate normal for CuPy
-        #x_normal = np.random.multivariate_normal(mean, covar, 1)
-        shape = [1] # Size of sampling
-        final_shape = list(shape[:])
-        final_shape.append(mean.shape[0])
-        x_normal = xp.random.standard_normal(final_shape).reshape(-1, mean.shape[0])
-        
-        # Decompose the matrix, Singular Value Decomposition
-        (u, s, v) = xp.linalg.svd(covar)
-
-        x_normal = xp.dot(x_normal, xp.sqrt(s)[:, None] * v)
-        x_normal += mean
-        x_normal = xp.reshape(x_normal, tuple(final_shape))
-
-        # Sample from the distribution the next values
-        x1_next, x2_next = x_normal[0][0], x_normal[0][1]
-
-        # Get the next eos
-        treshold_eos = 0.10 # Randomly chosen treshold
-        x3_next = 1 if treshold_eos < z_eos[k][0] else 0
-
-        x_pred[k, 0] = x1_next
-        x_pred[k, 1] = x2_next
-        x_pred[k, 2] = x3_next
-
-    return x_pred
 
 # ================
 # Functions (fcts)
@@ -148,392 +48,148 @@ def sample_from_mdn(z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho, xp=np)
 # ============
 # Links (lnks)
 # ============
-class AdaptiveWeightNoise(link.Link):
-    def __init__(self, in_size, out_size, weight_scale=1, no_bias=False, use_weight_noise=True):
-        super(AdaptiveWeightNoise, self).__init__()
-
-        with self.init_scope():
-            if no_bias:
-                M = np.random.normal(0, weight_scale, (out_size*in_size)).astype(np.float32)
-            else:
-                M = np.random.normal(0, weight_scale, (out_size*(in_size-1))).astype(np.float32)
-                M = M.reshape((1, out_size*(in_size-1)))
-                M = np.c_[M, np.zeros((1, out_size)).astype(np.float32)]
-                M = M.reshape(out_size*in_size)
-
-            self.M = chainer.Parameter(M)
-            self.logS2 = chainer.Parameter(np.log((np.ones((out_size*in_size))*1e-8).astype(np.float32)))
-
-        self.in_size  = in_size
-        self.out_size = out_size
-        self.no_bias = no_bias
-        self.use_weight_noise = use_weight_noise
-    
-    def __call__(self, batch_size):
-        """
-            Called the Alex Grave Adaptive Weight Noise
-
-            Args:
-                batch_size  (~chainer.Variable): 
-                    (batch size) * (number of truncated backward gradient calculation for a training dataset)
-
-            Returns:
-                ~chainer.Variable: Output of the linear layer.
-
-        """
-        
-        self.fWb, loss = adaptive_weight_noise(batch_size, self.M, self.logS2, self.use_weight_noise) 
-        
-        if self.no_bias:
-            return F.reshape(self.fWb, (self.out_size, self.in_size)), loss
-        else:
-            self.fW, self.fb = F.split_axis(self.fWb, np.asarray([(self.in_size -1)*self.out_size]), axis=0)
-            return F.reshape(self.fW, (self.out_size, self.in_size -1)), self.fb, loss
-
-class SoftWindow(link.Link):
+class SoftWindow(chainer.Chain):
     """
-        SoftWindow layer.
-        This is a SoftWindow layer as a chain. 
-        This is a link that wraps the :func:`~chainer.functions.mixturedensityoutputs` function,
-        and holds a weight matrix ``W`` and optionally a bias vector ``b`` as parameters.
+        The SoftWindow act as an attention mechanism which controls the alignment between the text and the pen position
 
         Args:
-            mix_size (int): number of mixture components.
+            mixture_size (int): size of the mixture "k"
     """
-    
-    def __init__(self, mix_size):
+    def __init__(self, mixture_size):
         super(SoftWindow, self).__init__()
 
-        self.mix_size = mix_size
-        self.ws = None
-        self.eow = None
-        self.reset_state()
-        
-    def reset_state(self):
+        with self.init_scope():
+            self.input_linear = L.linear(None)
+
+        self.mixture_size = mixture_size
         self.k_prev = None
-            
-    def __call__(self, cs, ls, h, W, b):
-        """
-            cs   :   one-hot-encoding of a length U character sequence 
-            h    :   input vector (summation of affine transformation of outputs from hidden layers)
-        """
-        y = F.linear(h, W, b)
-        
-        a_hat, b_hat, k_hat =  F.split_axis(y, np.asarray([self.mix_size, 2*self.mix_size]), axis=1) 
-        
-        if self.k_prev is None:
-            self.k_prev = variable.Variable(self.xp.zeros_like(k_hat.data))
-            
-        self.ws, self.k_prev, self.eow = soft_window(cs, ls, a_hat, b_hat, k_hat, self.k_prev)
-        return self.ws, self.eow
+        self.w = None
+        self.phi = None
 
-class MixtureDensityOutputs(link.Link):
-    """
-        Mixture-Density-Outputs layer.
-
-        This is a Mixture-Density-Outputs layer as a chain. 
-        This is a link that wraps the :func:`~chainer.functions.mixturedensityoutputs` function,
-        and holds a weight matrix ``W`` and optionally a bias vector ``b`` as parameters.
+    def reset_state(self):
+        """
+            Reset Variables
+        """
+        self.k_prev = None
+        self.w = None
+        self.phi = None
     
+    def __call__(self, inputs):
+        """
+            Perform the SoftWindow text-pen alignment prediction
+
+            Args:
+                inputs (float[][]): input tensor containing "x" and the character sequence "cs"
+            Returns:
+                window (float)
+        """
+        x, cs = inputs
+        batch_size, W, u = cs
+
+        # Extract the soft window's parameters
+        x_h = self.input_linear(x)
+        a_h, b_h, k_h = F.split_axis(x_h, [self.mix_comp_number, 2 * self.mix_comp_number], axis=1)
+
+        if self.k_prev:
+            self.k_prev = variable.Variables(self.xp.zeros_like(k_h, dtype=xp.float32))
+
+        a_h = F.exp(a_h)
+        b_h = F.exp(b_h)
+        k_h = self.k_prev + F.exp(k_h)
+        self.k_prev = k_h
+
+        # Compute phi's parameters
+        us = xp.linspace(0, u-1, u)
+        p_k = F.square(k_h - us)
+        p_b = F.scale(-b, p_k)
+        p_b = F.exp(p_b)
+        p_a = F.scale(a_h, p_b)
+        phi = F.sum(p_a, axis=1, keepdims=True)
+        self.phi = phi
+
+        # Finalize the soft window computation
+        w = F.matmul(phi, cs)
+        w = F.reshape(w, (batch_size, W))
+        self.w = w
+
+        return w
+
+class MixtureDensityNetwork(chainer.Chain):
+    """
+        The Mixture-Density-Network outputs a parametrised mixture distribution.
+        
         Args:
-            mix_size (int): number of mixture components.
+            n_mdn_comp (int): number of MDN components
+            prob_bias (int): bias added to the pi's probability
     """
-    
-    def __init__(self, mix_size):
-        super(MixtureDensityOutputs, self).__init__()
-
-        self.loss = None
-        self.xpred = None
-        self.eos = None
-        self.pi = None
-        self.mux = None
-        self.muy = None
-        self.sgx = None
-        self.sgy = None
-        self.rho = None
-        self.mix_size = mix_size
-    
-    def __call__(self, xnext, eow, h1, h2, h3, W1, W2, W3, b1, b2, b3, prob_bias):
-        """
-            xnext   :   next state of a pen. ndim=(batchsize,3)
-            h       :   input vector 
-            W1, W2, W3: (h.shape[1], 1 + mix_size * 6)
-            b1, b2, b3: (1, 1 + mix_size * 6)
-            prob_bias:  probability bias
-        """
-        
-        y  = F.linear(h1, W1, b1)
-        y += F.linear(h2, W2, b2)
-        y += F.linear(h3, W3, b3) 
-        
-        eos_hat, pi_hat, mu1_hat, mu2_hat, sg1_hat, sg2_hat, rho_hat = F.split_axis(
-                y,
-                np.asarray([1, 1+self.mix_size, 1+2*self.mix_size, 
-                            1+3*self.mix_size, 1+4*self.mix_size, 1+5*self.mix_size]), axis=1)
-        
-        self.loss, self.xpred, self.eos, self.pi, self.mux, self.muy, self.sgx, self.sgy, self.rho = mixture_density_outputs(
-            xnext, eow, eos_hat, pi_hat * (1. + prob_bias), mu1_hat, mu2_hat, sg1_hat - prob_bias, sg2_hat - prob_bias, rho_hat
-        )
-        
-        return self.loss, self.xpred, self.eos, self.pi, self.mux, self.muy, self.sgx, self.sgy, self.rho
-    
-class MixtureDensityNetwork(link.Link):
-    """
-        Mixture-Density-Network layer.
-
-        This is a Mixture-Density-Network layer as a chain. 
-        This is a link that wraps the :func:`~chainer.functions.mixturedensityoutputs` function,
-        and holds a weight matrix ``W`` and optionally a bias vector ``b`` as parameters.
-    
-        Args:
-            mix_size (int): number of mixture components.
-    """
-    
-    def __init__(self, mix_size):
+    def __init__(self, n_mdn_comp, prob_bias = 0):
         super(MixtureDensityNetwork, self).__init__()
 
-        self.mix_size = mix_size
-        self.loss = None
-        self.x_pred = None
-        self.eos = None
-        self.pi = None
-        self.mu_x1 = None
-        self.mu_x2 = None
-        self.s_x1 = None
-        self.s_x2 = None
-        self.rho = None
+        with self.init_scope():
+            self.input_linear = L.linear(None)
+
+        self.n_mdn_comp = n_mdn_comp
+        self.p_bias = prob_bias
     
-    def __call__(self, x, h1, h2, h3, W1, W2, W3, b1, b2, b3, prob_bias):
-        y  = F.linear(h1, W1, b1)
-        y += F.linear(h2, W2, b2)
-        y += F.linear(h3, W3, b3) 
-        
+    def __call__(self, inputs):
+        """
+            Perform the MDN prediction
+
+            Args:
+                inputs (float[][]): input tensor 
+            Returns:
+                loss (float)
+        """
+        x = inputs
+
+        # Extract the MDN's parameters
         eos_hat, pi_hat, mu_x1_hat, mu_x2_hat, s_x1_hat, s_x2_hat, rho_hat = F.split_axis(
-            y, np.asarray([1 + i*self.mix_size for i in xrange(5+1)]), axis=1
+            x, np.asarray([1 + i*self.n_mdn_comp for i in xrange(5+1)]), axis=1
         )
 
-        # Transform parameters
-        pi_hat *= (1. + prob_bias)
-        s_x1_hat -= prob_bias
-        s_x2_hat -= prob_bias
-        
-        self.loss, self.x_pred, self.eos, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = mixture_density_network(
-            x, eos_hat, pi_hat, mu_x1_hat, mu_x2_hat, s_x1_hat, s_x2_hat, rho_hat
-        )
-        
-        return self.loss, self.x_pred, self.eos, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho        
 
-
-class LSTM(link.Link):
-    """
-        LSTM
-        A wrapper around the cell states
-
-        Args:
-            out_size (int): number of cells inside the LSTM
-    """
-    def __init__(self, out_size):
-        super(LSTM, self).__init__()
-        self.state_size = out_size
-        self.reset_state()
-
-    def reset_state(self):
-        self.c = self.h = None
-
-    def __call__(self, x, W_lateral, b_lateral):
-        lstm_in = x
-        if self.h is not None:
-            lstm_in += F.linear(self.h, W_lateral, b_lateral)
-        if self.c is None:
-            self.c = variable.Variable(self.xp.zeros((len(x.data), self.state_size), dtype=x.data.dtype))
-
-        self.c, self.h = F.lstm(self.c, lstm_in)
-        return self.h
-        
+        # Add the bias to the parameter to change the shape of the prediction
+            
 
 # =============
 # Models (mdls)
-# =============
-
+# ============= 
 class Model(chainer.Chain):
     """
-        Handwriting Synthesis Model
+        Synthesis model is defined as:
+            - Batch (pen positions) -> LSTM1
+            - Batch + one-hot (character sequences + LSTM1 -> SoftWindow
+            - Batch + SoftWindow + LSTM 1 -> LSTM2
+            - LSTM2 -> LSTM 3
+            - LSTM3 -> MDM
+            - MDN -> output
+
+        Args:
+            n_units (int): number of hidden units in LSTM cells
+            n_mixture_components (int): number of MDN components
+            n_window_unit (int): number of parameters in the softwindow
+        Returns
+            loss (float)
     """
-    def __init__(self, n_chars, input_size, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number, weight_scale=0.1, use_adaptive_noise=True):
+
+    def __init__(self, n_units, n_mixture_components, n_window_unit):
         super(Model, self).__init__()
 
         with self.init_scope():
-           self.awn_x_l1 = AdaptiveWeightNoise((input_size+1), 4*rnn_cells_number, weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
-           self.awn_x_l2 = AdaptiveWeightNoise((input_size+1), 4*rnn_cells_number, weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
-           self.awn_x_l3 = AdaptiveWeightNoise((input_size+1), 4*rnn_cells_number, weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+            # LSTMs layers
+            self.lstm1 = L.LSTM(n_units)
+            self.lstm2 = L.LSTM(n_units)
+            self.lstm3 = L.LSTM(n_units)
+            
+            # Attention mechanism
+            self.soft_window = SoftWindow(n_window_unit)
 
-           self.awn_l1_ws = AdaptiveWeightNoise((rnn_cells_number+1), (3*win_unit_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+            # Mixture Density Network
 
-           self.awn_ws_l1 = AdaptiveWeightNoise((n_chars+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
-           self.awn_ws_l2 = AdaptiveWeightNoise((n_chars+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
-           self.awn_ws_l3 = AdaptiveWeightNoise((n_chars+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
+            # Linear connections for some layers
+            self.sw_input = L.linear(None)
+            #self.lstm3_output = L.linear(None)
 
-           self.awn_l1_l1 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
-           self.awn_l2_l2 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
-           self.awn_l3_l3 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
-           self.awn_l1_l2 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
-           self.awn_l2_l3 = AdaptiveWeightNoise((rnn_cells_number+1), (4*rnn_cells_number), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
-
-           self.awn_l1_ms = AdaptiveWeightNoise((rnn_cells_number+1), (1+mix_comp_number*6), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
-           self.awn_l2_ms = AdaptiveWeightNoise((rnn_cells_number+1), (1+mix_comp_number*6), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
-           self.awn_l3_ms = AdaptiveWeightNoise((rnn_cells_number+1), (1+mix_comp_number*6), weight_scale, no_bias=False, use_weight_noise=use_adaptive_noise)
-
-           self.ws = SoftWindow(win_unit_number)
-
-           self.l1 = LSTM(rnn_cells_number)
-           self.l2 = LSTM(rnn_cells_number)
-           self.l3 = LSTM(rnn_cells_number)
-
-           #self.ms = MixtureDensityOutputs(mix_comp_number)
-           self.ms = MixtureDensityNetwork(mix_comp_number)
-
-        self.win_unit_number = win_unit_number
-        self.rnn_cells_number = rnn_layers_number
-        self.mix_comp_number = mix_comp_number
-        self.n_chars = n_chars
-        self.use_adaptive_noise = use_adaptive_noise
-        self._awn_weights = {}
-        self._awn_biases = {}
-        self.eow = None
-
-        self.reset_state()
-
-    def reset_state(self):
-        self.ws.reset_state()
-        self.l1.reset_state()
-        self.l2.reset_state()
-        self.l3.reset_state()
-
-        self.ws_output = None
-        self.ws_to_l1 = None
-        self.loss_complex = None
-
-    def get_awn_weight_name(self, awn_link_name):
-        """
-            Get the link name containing the weight
-
-            Args:
-                awn_link_name (string): name of the awn link corresponding to the weight
-            Returns:
-                (string)
-        """
-        name = awn_link_name[4:] if awn_link_name[:4] == "awn_" else awn_link_name
-        return "awn_" + name + "_weight"
-
-    def get_awn_bias_name(self, awn_link_name):
-        """
-            Get the link name containing the bias
-
-            Args:
-                awn_link_name (string): name of the awn link corresponding to the bias
-            Returns:
-                (string)
-        """
-        name = awn_link_name[4:] if awn_link_name[:4] == "awn_" else awn_link_name
-        return "awn_" + name + "_bias"
-
-    def get_awn_weight_link(self, awn_link_name):
-        """
-            Get the link containing the weight
-
-            Args:
-                awn_link_name (string): name of the awn link corresponding to the weight
-            Returns:
-                (link.Link)
-        """
-        name = self.get_awn_weight_name(awn_link_name)
-        return self._awn_weights[name]
-
-    def get_awn_bias_link(self, awn_link_name):
-        """
-            Get the link containing the bias
-
-            Args:
-                awn_link_name (string): name of the awn link corresponding to the weight
-            Returns:
-                (link.Link)
-        """
-        name = self.get_awn_bias_name(awn_link_name)
-        return self._awn_biases[name]
-
-
-    def __call__(self, x, renew_weights=True):
-        """ Unpack and configure the network """
-        x_now, x_next, cs, ls, prob_bias, n_batches = x
-        testing = chainer.config.train is False
-
-        # Use CuPY if available
-        xp = cuda.get_array_module(*x_now.data)
-
-        # Generate the weight and bias for adaptive weight noise
-        if renew_weights:
-            for child_link in self.children():
-                if child_link.name[:3] != "awn":
-                    continue
-                # The weight and bias adds _weight and _bias to the child_link name.
-                # E.g: awn_x_l1 => awn_x_l1_weight, awn_x_l1_bias
-                weight_name = self.get_awn_weight_name(child_link.name)
-                bias_name = self.get_awn_bias_name(child_link.name)
-                if testing:
-                    # Generate weight without weight noise
-                    fW, b = F.split_axis(child_link.M, np.array([(child_link.in_size -1)*child_link.out_size]), axis=0)
-                    W = F.reshape(fW, (child_link.out_size, child_link.in_size-1))
-                    self._awn_weights[weight_name] = W
-                    self._awn_biases[bias_name] = b
-                else:
-                    # Generate weight with weight noise
-                    W, b, loss = child_link(n_batches)
-                    self._awn_weights[weight_name] = W
-                    self._awn_biases[bias_name] = b
-                    if self.loss_complex is None:
-                        self.loss_complex = F.reshape(loss, (1,1))
-                    else:
-                        self.loss_complex = F.concat((self.loss_complex, F.reshape(loss, (1,1))))
-
-        """ Begins the transformations """
-        # Linear
-        l1_in = F.linear(x_now, self.get_awn_weight_link("x_l1"), self.get_awn_bias_link("x_l1"))
-        l2_in = F.linear(x_now, self.get_awn_weight_link("x_l2"), self.get_awn_bias_link("x_l2"))
-        l3_in = F.linear(x_now, self.get_awn_weight_link("x_l3"), self.get_awn_bias_link("x_l3"))
-
-        # LSTM1
-        if self.ws_output is not None:
-            l1_in += self.ws_to_l1
-        l1_h = self.l1(l1_in, self.get_awn_weight_link("l1_l1"), self.get_awn_bias_link("l1_l1"))
-
-        # SoftWindow
-        self.ws_output, self.eow = self.ws(cs, ls, l1_h, self.get_awn_weight_link("l1_ws"), self.get_awn_bias_link("l1_ws"))
-        self.ws_to_l1 = F.linear(self.ws_output, self.get_awn_weight_link("ws_l1"), self.get_awn_bias_link("ws_l1"))
-        self.ws_to_l2 = F.linear(self.ws_output, self.get_awn_weight_link("ws_l2"), self.get_awn_bias_link("ws_l2"))
-        self.ws_to_l3 = F.linear(self.ws_output, self.get_awn_weight_link("ws_l3"), self.get_awn_bias_link("ws_l3"))
-
-        # LSTM2
-        l2_in += F.linear(l1_h, self.get_awn_weight_link("l1_l2"), self.get_awn_bias_link("l1_l2"))
-        l2_in += self.ws_to_l2
-        l2_h = self.l2(l2_in, self.get_awn_weight_link("l2_l2"), self.get_awn_bias_link("l2_l2"))
-
-        # LSTM3
-        l3_in += F.linear(l2_h, self.get_awn_weight_link("l2_l3"), self.get_awn_bias_link("l2_l3"))
-        l3_in += self.ws_to_l3
-        l3_h = self.l3(l3_in, self.get_awn_weight_link("l3_l3"), self.get_awn_bias_link("l3_l3"))
-
-        loss_network, x_pred, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho = self.ms(
-            x_next, l1_h, l2_h, l3_h,
-            self.get_awn_weight_link("l1_ms"),
-            self.get_awn_weight_link("l2_ms"),
-            self.get_awn_weight_link("l3_ms"),
-            self.get_awn_bias_link("l1_ms"),
-            self.get_awn_bias_link("l2_ms"),
-            self.get_awn_bias_link("l3_ms"),
-            prob_bias
-        )
-        return loss_network, x_pred, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho, self.loss_complex
-        
 
 # ===============================================
 # Main entry point of the training process (main)
@@ -560,6 +216,12 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
         chainer.config.debug = True
 
     """ Fetching the model and the inputs """
+    def load_data(path):
+        f = open(path, "rb")
+        data = pickle.load(f)
+        f.close()
+        return f
+
     logger.info("Fetching the model and the inputs")
     train_data = load_data(data_dir + "/train/train_data")
     train_characters = load_data(data_dir + "/train/train_characters")
@@ -567,17 +229,12 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     valid_characters = load_data(data_dir + "/valid/valid_characters")
     vocab = load_data(data_dir + "/vocabulary")
 
-
     """ Create the model """
-    n_max_seq_length = max(get_max_sequence_length(train_characters), get_max_sequence_length(valid_characters))
-    n_chars = len(vocab)
-    wscale = 0.1
-
     logger.info("Creating the model")
-    if peephole == 0:
-        model = Model(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number, use_adaptive_noise=True if use_weight_noise == 1 else False)
-    else:
-        model = ModelPeephole(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number)
+    #if peephole == 0:
+        
+    #else:
+        #model = ModelPeephole(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number)
 
     """ Setup the model """
     logger.info("Setuping the model")
@@ -602,390 +259,6 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_model, model)
         if resume_optimizer != "":
             chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_optimizer, optimizer)
-
-    # Create an array of [train_data, train_characters]
-    group_set_training = []
-    group_set_validation = []
-    for i in xrange(len(train_data)):
-        tmp = []
-        tmp.append(train_data[i])
-        tmp.append(train_characters[i])
-        group_set_training.append(tmp)
-    for i in xrange(len(valid_data)):
-        tmp = []
-        tmp.append(valid_data[i])
-        tmp.append(valid_characters[i])
-        group_set_validation.append(tmp)
-
-    # Chainer Iteration class for the mini-batches
-    #train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=True, shuffle=True)
-    train_iter = chainer.iterators.SerialIterator(group_set_training, batch_size, repeat=True, shuffle=True)
-    valid_iter = chainer.iterators.SerialIterator(group_set_validation, 256, repeat=False, shuffle=True)
-
-
-    """ Begin training """
-    accum_loss_network_train = np.zeros((epochs, 5))
-    accum_loss_network_valid = np.zeros((epochs, 5))
-    accum_loss_complex_train = np.zeros((epochs, 2, 15))
-    accum_mse_network_train = np.zeros((epochs, 5))
-    accum_mse_eos_network_train = np.zeros((epochs, 5))
-
-    min_valid_loss = np.zeros(1)
-    thr_valid_loss = -1100.0
-
-    xp.random.seed(random_seed)
-    np.random.seed(random_seed)
-    n_batches_counter, n_batches = None, None
-
-    t_epoch_start = time.time()
-    elapsed_forward = 0
-    elapsed_backward = 0
-    losses_network = None
-    losses_complex = None
-    recon_costs = None
-    mse_network = []
-    mse_eos_network = []
-    while train_iter.epoch < epochs:
-        epoch = train_iter.epoch
-        t_sub_epoch_start = time.time()
-        logger.info("Beginning training for epoch {0} ({1}/{2})".format(epoch+1, train_iter.current_position/batch_size+1, int(math.ceil(len(group_set_training)/batch_size))))
-
-        batch = np.array(train_iter.next())
-
-        # The mini-batch should be padded to be the same length
-        train_data_batch, train_characters_batch = get_padded_data(batch[:, 0], batch[:, 1])
-
-        # count number of backward() (computaion of gradients). this value is important for # complex_loss! See Graves 2011 p5 equation 18 for detail !
-        if not isinstance(n_batches, variable.Variable):
-            n_batches_counter = xp.zeros(1)
-            for i in xrange(int(math.floor(len(group_set_training)/batch_size))):
-                n_batches_counter += 1
-
-            n_batches = chainer.Variable(xp.asarray(n_batches_counter).astype(xp.int32))
-
-        """ Run the training for all the data in the mini-batch """
-        prob_bias = 0.0
-        if len(train_data_batch) > 1:
-            now = time.time()
-            offset_batch_size, t_max, x_dim = train_data_batch.shape
-            if truncated_data_samples is not -1:
-                t_max = truncated_data_samples if t_max > truncated_data_samples else t_max
-
-            # One-hot encoding of character for all the sequence
-            cs_data = xp.zeros((offset_batch_size, n_chars, n_max_seq_length))
-            ls_data = xp.zeros((offset_batch_size, 1))
-            for j in xrange(offset_batch_size):
-                for k in xrange(len(train_characters_batch[j])):
-                    length = train_characters_batch[j][k]
-                    cs_data[j, length, k] = 1.0
-
-            cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32))
-            ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32))
-
-            # Training parameters
-            loss_network = xp.zeros((offset_batch_size, 1))
-            loss_complex = xp.zeros(1)
-            accum_loss = 0
-            model.cleargrads()
-
-            # @TODO: Make the backpropagation length dynamic
-            back_prop_len = t_max + 1 if t_max < 1600 else t_max / 2
-            if truncated_back_prop_len != 0:
-                back_prop_len = truncated_back_prop_len
-
-            # For each data in the batchsize run the training
-            logger.info("Training {0} samples and back-propagating at every {1} samples".format(t_max, back_prop_len))
-
-            mse = None # MSE on x_pred
-            mse_eos = None # MSE on eos
-            mse_sampling_count = 10
-            mse_index_sampling = xp.arange(0, t_max, int(round(t_max/mse_sampling_count)))
-
-            x_predictions = None
-            for t in xrange(t_max-1):
-                t_forward = time.time()
-                # For all positions in the batch (t), take the current X,Y coordinate (x_now) and the next X,Y coordinate (x_next)
-                x_now = chainer.Variable(xp.asarray(train_data_batch[0:offset_batch_size, t, 0:x_dim]).astype(xp.float32))
-                x_next = chainer.Variable(xp.asarray(train_data_batch[0:offset_batch_size, t+1, 0:x_dim]).astype(xp.float32))
-                #logger.info("Training data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1))
-
-                # The weight are updated only in the first iteration
-                local_update_weight = update_weight if t == 0 else False
-                #loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, local_update_weight)
-                x = [x_now, x_next, cs, ls, prob_bias, n_batches]
-                loss_i, _, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, local_update_weight)
-
-                if t in mse_index_sampling:
-                    # MSE on x_pred
-                    with chainer.no_backprop_mode():
-                        x_pred = sample_from_mdn(eos_i.data, pi_i.data, mux_i.data, muy_i.data, sgx_i.data, sgy_i.data, rho_i.data, xp)
-                        x_pred = F.expand_dims(x_pred, axis=1)
-                        x_predictions = x_pred.data if x_predictions is None else xp.concatenate((x_predictions, x_pred.data), axis=1)
-
-                # Get stats
-                accum_loss += F.sum(loss_i)/offset_batch_size
-                loss_network += loss_i.data
-                elapsed_forward += time.time() - t_forward
-                loss_complex_i_cpu = cuda.to_cpu(loss_complex_i.data)
-
-                # Backprop the error
-                if t > 0:
-                    # Complete backprop
-                    if back_prop_len == -1:
-                        t_backward = time.time()
-                        accum_loss.backward()
-                        accum_loss.unchain_backward()
-                        accum_loss = 0
-                        elapsed_backward += time.time() - t_backward
-                    # Truncated backprop
-                    elif (t+1) % back_prop_len == back_prop_len-1 or t == t_max-3:
-                        t_backward = time.time()
-                        accum_loss.backward()
-                        accum_loss.unchain_backward()
-                        accum_loss = 0
-                        elapsed_backward += time.time() - t_backward
-
-            # Update parameters at the end of all the processed data from a mini-batch
-            optimizer.update()
-            cur_at = time.time()
-            throuput = t_max/(cur_at - now)
-
-            # Finalize MSE: create a mask array to mitigate added padding
-            mask_padding = xp.ones_like(train_data_batch[:,0:t_max-1,:])
-            #mask_padding[xp.argwhere(train_data_batch[:,:,2:3] == 2)] = 0
-            for m in xrange(len(train_data_batch)):
-                for n in xrange(len(train_data_batch[m]), t_max-1):
-                    if train_data_batch[m][n][2] == 2:
-                        mask_padding[m][n] = xp.zeros((3))
-
-            def mse_op(true, pred, mask_true, mask_pred):
-                return xp.sum(xp.square(true*mask_true - pred*mask_pred))/pred.shape[1]
-
-            mse = mse_op(xp.asarray(train_data_batch[:, :, 0:2]).astype(xp.float32).take(mse_index_sampling+1, axis=1), x_predictions[:,:,0:2], mask_padding[:,:,0:2].take(mse_index_sampling+1, axis=1), mask_padding[:,:,0:2].take(mse_index_sampling, axis=1))
-            mse_eos = mse_op(xp.asarray(train_data_batch[:, :, 2:3]).astype(xp.float32).take(mse_index_sampling+1, axis=1), x_predictions[:,:,2:3], mask_padding[:,:,2:3].take(mse_index_sampling+1, axis=1), mask_padding[:,:,2:3].take(mse_index_sampling, axis=1))
-
-            # Update global statistics
-            losses_network = xp.copy(loss_network) if losses_network is None else xp.concatenate((losses_network, loss_network), axis=0)
-            losses_complex = xp.copy(loss_complex_i.data) if losses_complex is None else xp.concatenate((losses_complex, loss_complex_i.data), axis=0)
-            #mse_network = xp.copy(xp.asarray([mse.data])) if mse_network is None else xp.concatenate((mse_network, xp.asarray([mse.data])), axis=0)
-            #mse_network.append(chainer.cuda.to_cpu(mse))
-            mse_network.append(mse)
-            #mse_eos_network.append(chainer.cuda.to_cpu(mse_eos))
-            mse_eos_network.append(mse_eos)
-
-            model.reset_state()
-            logger.info("Mini-batch computation time: {} seconds".format(time.time()-t_sub_epoch_start))
-            logger.info("Mean squared error: {}".format(mse))
-            logger.info("Mean squared error EOS: {}".format(mse_eos))
-            logger.info("Iteration loss: {}".format(accum_loss))
-                
-        """ All the training mini-batches have been processed """
-        if train_iter.is_new_epoch:
-            # Global results for one epoch
-            losses_network_cpu = losses_network if xp == np else cuda.to_cpu(losses_network)
-            losses_complex_cpu = losses_complex if xp == np else cuda.to_cpu(losses_complex)
-            mse_network_cpu = np.asarray(mse_network)
-            mse_eos_network_cpu = np.asarray(mse_eos_network)
-
-            accum_loss_network_train[epoch, 0] = losses_network_cpu.mean()
-            accum_loss_network_train[epoch, 1] = losses_network_cpu.std()
-            accum_loss_network_train[epoch, 2] = losses_network_cpu.min()
-            accum_loss_network_train[epoch, 3] = losses_network_cpu.max()
-            accum_loss_network_train[epoch, 4] = np.median(losses_network_cpu)
-
-            accum_loss_complex_train[epoch, 0, 0:] = losses_complex_cpu.mean(axis=0)
-            accum_loss_complex_train[epoch, 1, 0:] = losses_complex_cpu.std(axis=0)
-
-            accum_mse_network_train[epoch, 0] = mse_network_cpu.mean()
-            accum_mse_network_train[epoch, 1] = mse_network_cpu.std()
-            accum_mse_network_train[epoch, 2] = mse_network_cpu.min()
-            accum_mse_network_train[epoch, 3] = mse_network_cpu.max()
-            accum_mse_network_train[epoch, 4] = np.median(mse_network_cpu)
-
-            accum_mse_eos_network_train[epoch, 0] = mse_eos_network_cpu.mean()
-            accum_mse_eos_network_train[epoch, 1] = mse_eos_network_cpu.std()
-            accum_mse_eos_network_train[epoch, 2] = mse_eos_network_cpu.min()
-            accum_mse_eos_network_train[epoch, 3] = mse_eos_network_cpu.max()
-            accum_mse_eos_network_train[epoch, 4] = np.median(mse_eos_network_cpu)
-
-            elapsed_time = time.time() - t_epoch_start
-
-            logger.info("Epoch: {0}/{1} completed for training".format(epoch+1, epochs))
-            logger.info("Training loss network: {0:>9.4f} +- {1:<9.4f}  {2:>9.4f} < {3:>9.4f} < {4:>9.4f}"
-                        .format(accum_loss_network_train[epoch, 0],
-                                accum_loss_network_train[epoch, 1],
-                                accum_loss_network_train[epoch, 2],
-                                accum_loss_network_train[epoch, 4],
-                                accum_loss_network_train[epoch, 3]))
-            logger.info("Total elapsed time: {0:>9.2f}".format(elapsed_time))
-
-            # Loss for each layers
-            logger.info("Training loss complex (mean): {0:>9.4f}  {1:>9.4f}  {2:>9.4f}  {3:>9.4f} {4:>9.4f}  {5:>9.4f}  {6:>9.4f} {7:>9.4f}  {8:>9.4f}  {9:>9.4f}  {10:>9.4f} {11:>9.4f}  {12:>9.4f}  {13:>9.4f} {14:>9.4f}"
-                        .format(accum_loss_complex_train[epoch, 0][0],
-                                accum_loss_complex_train[epoch, 0][1],
-                                accum_loss_complex_train[epoch, 0][2],
-                                accum_loss_complex_train[epoch, 0][3],
-                                accum_loss_complex_train[epoch, 0][4],
-                                accum_loss_complex_train[epoch, 0][5],
-                                accum_loss_complex_train[epoch, 0][6],
-                                accum_loss_complex_train[epoch, 0][7],
-                                accum_loss_complex_train[epoch, 0][8],
-                                accum_loss_complex_train[epoch, 0][9],
-                                accum_loss_complex_train[epoch, 0][10],
-                                accum_loss_complex_train[epoch, 0][11],
-                                accum_loss_complex_train[epoch, 0][12],
-                                accum_loss_complex_train[epoch, 0][13],
-                                accum_loss_complex_train[epoch, 0][14]))
-            logger.info("Training loss complex (std): {0:>9.4f}  {1:>9.4f}  {2:>9.4f}  {3:>9.4f} {4:>9.4f}  {5:>9.4f}  {6:>9.4f}{7:>9.4f}  {8:>9.4f}  {9:>9.4f}  {10:>9.4f} {11:>9.4f}  {12:>9.4f}  {13:>9.4f}  {14:>9.4f}"
-                        .format(epoch,
-                                accum_loss_complex_train[epoch, 1][0],
-                                accum_loss_complex_train[epoch, 1][1],
-                                accum_loss_complex_train[epoch, 1][2],
-                                accum_loss_complex_train[epoch, 1][3],
-                                accum_loss_complex_train[epoch, 1][4],
-                                accum_loss_complex_train[epoch, 1][5],
-                                accum_loss_complex_train[epoch, 1][6],
-                                accum_loss_complex_train[epoch, 1][7],
-                                accum_loss_complex_train[epoch, 1][8],
-                                accum_loss_complex_train[epoch, 1][9],
-                                accum_loss_complex_train[epoch, 1][10],
-                                accum_loss_complex_train[epoch, 1][11],
-                                accum_loss_complex_train[epoch, 1][12],
-                                accum_loss_complex_train[epoch, 1][13],
-                                accum_loss_complex_train[epoch, 1][14]))
-
-            # MSE
-            logger.info("Training MSE: {0:>9.4f} +- {1:<9.4f}  {2:>9.4f} < {3:>9.4f} < {4:>9.4f}"
-                        .format(accum_mse_network_train[epoch, 0],
-                                accum_mse_network_train[epoch, 1],
-                                accum_mse_network_train[epoch, 2],
-                                accum_mse_network_train[epoch, 4],
-                                accum_mse_network_train[epoch, 3]))
-
-            logger.info("Training MSE eos: {0:>9.4f} +- {1:<9.4f}  {2:>9.4f} < {3:>9.4f} < {4:>9.4f}"
-                        .format(accum_mse_eos_network_train[epoch, 0],
-                                accum_mse_eos_network_train[epoch, 1],
-                                accum_mse_eos_network_train[epoch, 2],
-                                accum_mse_eos_network_train[epoch, 4],
-                                accum_mse_eos_network_train[epoch, 3]))
-
-            """ Save the model """
-            if epoch % save_interval == 0:
-                accum_loss_network_train_cpu = accum_loss_network_train if xp == np else cuda.to_cpu(accum_loss_network_train)
-                accum_loss_complex_train_cpu = accum_loss_complex_train if xp == np else cuda.to_cpu(accum_loss_complex_train)
-                accum_mse_network_train_cpu = accum_mse_network_train
-                accum_mse_eos_network_train_cpu = accum_mse_eos_network_train
-
-                save_dir = output_dir + '/' + model_suffix_dir
-                if not os.path.exists(save_dir):
-                    os.makedirs(save_dir)
-
-                logger.info("Saving the results for epoch {}".format(epoch+1))
-                np.save(save_dir + '/loss_network_train', accum_loss_network_train_cpu)
-                np.save(save_dir + '/loss_complex_train', accum_loss_complex_train_cpu)
-                np.save(save_dir + '/mse_network_train', accum_mse_network_train_cpu)
-                np.save(save_dir + '/mse_eos_network_train', accum_mse_eos_network_train_cpu)
-
-                logger.info("Saving the model and the optimizer for epoch {}".format(epoch+1))
-                chainer.serializers.save_npz(save_dir + '/model-' + str(epoch), model)
-                chainer.serializers.save_npz(save_dir + '/state-' + str(epoch), optimizer)
-
-            """ Validation step """
-            prob_bias = 0.0
-            losses_valid = None
-            logger.info("Validating data for epoch {0}".format(epoch+1))
-            recon_cost = 0
-            for valid_batch in valid_iter:
-                valid_batch = np.array(valid_batch)
-                valid_data_batch, valid_characters_batch = get_padded_data(valid_batch[:, 0], valid_batch[:, 1], False)
-                offset_valid_batch_size, t_max_valid, x_dim_valid = valid_data_batch.shape
-                if truncated_data_samples is not -1:
-                    t_max_valid = truncated_data_samples if t_max_valid > truncated_data_samples else t_max_valid
-
-                # Training parameters
-                loss_network = xp.zeros((offset_valid_batch_size, 1))
-                loss_complex = xp.zeros((offset_valid_batch_size, 1))
-
-                # One-hot encoding of character for all the sequence
-                cs_data = xp.zeros((offset_valid_batch_size, n_chars, n_max_seq_length))
-                ls_data = xp.zeros((offset_valid_batch_size, 1))
-                cs, ls = None, None
-                for j in xrange(len(valid_characters_batch)):
-                    for k in xrange(len(valid_characters_batch[j])):
-                        length = valid_characters_batch[j][k]
-                        cs_data[j, length, k] = 1.0
-
-                # For each data in the batchsize run the validation
-                with chainer.no_backprop_mode(), chainer.using_config('train', False):
-                    for t in xrange(t_max-1):
-                        if cs is None:
-                            cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32))
-                        if ls is None:
-                            ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32))
-
-                        x_now = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t, 0:x_dim_valid]).astype(xp.float32))
-                        x_next = chainer.Variable(xp.asarray(valid_data_batch[0:offset_valid_batch_size, t+1, 0:x_dim_valid]).astype(xp.float32))
-                        #logger.info("Validating data {0}/{1} for epoch {2}".format(t+1, t_max, epoch+1)) #loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x_now, x_next, cs, ls, prob_bias, n_batches, renew_weights=False, testing=True)
-                        x = [x_now, x_next, cs, ls, prob_bias, n_batches]
-                        loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, renew_weights=False)
-
-                        loss_network += loss_i.data
-
-                        # MSE
-                        #recon_cost += F.sum(F.square(x_next[:, 0:2] - x_pred[:, 0:2]))/offset_valid_batch_size
-
-                losses_valid = xp.copy(loss_network) if losses_valid is None else xp.concatenate((losses_valid, loss_network), axis=0)
-                #recon_costs = xp.asarray([recon_cost.data]) if recon_costs is None else xp.concatenate((recon_costs, xp.asarray([recon_cost.data])), axis=0)
-
-                # Reset the model after each batch of data for validation
-                model.reset_state()
-
-            # Invalidate the iteration count for the next epoch
-            valid_iter.reset()
-
-            """ Statistics for validation """
-            losses_network_cpu = losses_valid if xp == np else cuda.to_cpu(losses_valid)
-            #recon_costs_cpu = recon_costs if xp == np else cuda.to_cpu(recon_costs)
-
-            accum_loss_network_valid[epoch, 0] = losses_network_cpu.mean()
-            accum_loss_network_valid[epoch, 1] = losses_network_cpu.std()
-            accum_loss_network_valid[epoch, 2] = losses_network_cpu.min()
-            accum_loss_network_valid[epoch, 3] = losses_network_cpu.max()
-            accum_loss_network_valid[epoch, 4] = np.median(losses_network_cpu)
-            #accum_loss_network_valid[epoch, 5] = recon_costs_cpu
-
-            logger.info("Epoch: {0}/{1} completed for validation".format(epoch+1, epochs))
-            logger.info("Validation loss network: {0:>9.4f} +- {1:<9.4f}  {2:>9.4f} < {3:>9.4f} < {4:>9.4f}"
-                        .format(accum_loss_network_valid[epoch, 0],
-                                accum_loss_network_valid[epoch, 1],
-                                accum_loss_network_valid[epoch, 2],
-                                accum_loss_network_valid[epoch, 4],
-                                accum_loss_network_valid[epoch, 3]))
-
-            """ Create the best fit model and optimizer """
-            if accum_loss_network_valid[epoch, 0] < min_valid_loss[0] and accum_loss_network_valid[epoch, 0] < thr_valid_loss:
-                logger.info("Best fit for model and optmizer was found, saving them")
-                chainer.serializers.save_npz(save_dir + '/model-best', model)
-                chainer.serializers.save_npz(save_dir + '/state-best', optimizer)
-                min_valid_loss[0] = accum_loss_network_valid[epoch, 0]
-
-            if epoch % save_interval == 0:
-                accum_loss_network_valid_cpu = accum_loss_network_valid if xp == np else cuda.to_cpu(accum_loss_network_valid)
-                np.save(save_dir + '/loss_network_valid', accum_loss_network_valid_cpu)
-
-            """ Reset the variables for the next iteration """
-            n_batches = None
-            t_epoch_start = time.time()
-            elapsed_forward = 0
-            elapsed_backward = 0
-            losses_network = None
-            losses_complex = None
-            recon_costs = None
-            mse_network = []
-            mse_eos_network = []
-
-    # Subsequent scripts can use the results of this network without having to open the npy files
-    return accum_loss_network_train, accum_loss_network_valid
 
 
 # ===============
