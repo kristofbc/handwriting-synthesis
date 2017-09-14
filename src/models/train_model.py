@@ -404,7 +404,7 @@ class Model(chainer.Chain):
         batch_size, t_max, x_dim = data.shape
 
         # Create the one-hot encoding
-        cs = variable.Variable(cs_data)
+        cs = variable.Variable(self.xp.asarray(cs_data))
 
         # Train all samples in batch
         loss = 0
@@ -484,15 +484,6 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     #else:
         #model = ModelPeephole(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number)
 
-    """ Setup the model """
-    logger.info("Setuping the model")
-    #optimizer = chainer.optimizers.Adam(alpha=0.001, beta1=0.90, beta2=0.999, eps=1e-08)
-    optimizer = chainer.optimizers.Adam()
-    optimizer.setup(model)
-
-    if grad_clip is not 0:
-        optimizer.add_hook(chainer.optimizers.GradientClipping(grad_clip))
-
     """ Enable cupy, if available """
     if gpu > -1:
         logger.info("Enabling CUpy")
@@ -501,6 +492,15 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
         model.to_gpu()
     else:
         xp = np
+
+    """ Setup the model """
+    logger.info("Setuping the model")
+    #optimizer = chainer.optimizers.Adam(alpha=0.001, beta1=0.90, beta2=0.999, eps=1e-08)
+    optimizer = chainer.optimizers.Adam()
+    optimizer.setup(model)
+
+    if grad_clip is not 0:
+        optimizer.add_hook(chainer.optimizers.GradientClipping(grad_clip))
 
     if resume_dir:
         logger.info("Loading state from {}".format(output_dir + '/' + resume_dir))
@@ -629,7 +629,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
 
 @click.command()
-@click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWriting', help='Directory containing the data.')
+@click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWritingSM', help='Directory containing the data.')
 @click.option('--output_dir', type=click.Path(exists=False), default='models', help='Directory for model checkpoints.')
 @click.option('--batch_size', type=click.INT, default=64, help='Size of the mini-batches.')
 @click.option('--peephole', type=click.INT, default=0, help='LSTM with Peephole.')
