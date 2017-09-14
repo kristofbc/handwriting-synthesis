@@ -167,7 +167,7 @@ class SoftWindowFunction(function.Function):
 # ============
 # Links (lnks)
 # ============
-class SoftWindow(chainer.Chain):
+class SoftWindow(chainer.Link):
     """
         The SoftWindow act as an attention mechanism which controls the alignment between the text and the pen position
 
@@ -179,10 +179,9 @@ class SoftWindow(chainer.Chain):
         super(SoftWindow, self).__init__()
 
         with self.init_scope():
-            self.input_linear = L.Linear(3*mixture_size)
-
-        self.mixture_W = chainer.Parameter(chainer.initializers.Normal(0.075), (3*mixture_size, unit_size))
-        self.mixture_b = chainer.Parameter(chainer.initializers.Normal(0.25), (3*mixture_size))
+            #self.input_linear = L.Linear(3*mixture_size)
+            self.mixture_W = chainer.Parameter(chainer.initializers.Normal(0.075), (3*mixture_size, unit_size))
+            self.mixture_b = chainer.Parameter(chainer.initializers.Normal(0.25), (3*mixture_size))
 
         self.mixture_size = mixture_size
         self.unit_size = unit_size
@@ -223,7 +222,7 @@ class SoftWindow(chainer.Chain):
 
         return self.w
 
-class MixtureDensityNetwork(chainer.Chain):
+class MixtureDensityNetwork(chainer.Link):
     """
         The Mixture-Density-Network outputs a parametrised mixture distribution.
         
@@ -236,10 +235,9 @@ class MixtureDensityNetwork(chainer.Chain):
         super(MixtureDensityNetwork, self).__init__()
 
         with self.init_scope():
-            self.input_linear = L.Linear(1 + n_mdn_comp * 6) # end_of_stroke + 6 parameters per Gaussian
-
-        self.mdn_W = chainer.Parameter(chainer.initializers.Normal(0.075), (1 + n_mdn_comp * 6, n_units))
-        self.mdn_b = chainer.Parameter(chainer.initializers.Normal(0.075), (1 + n_mdn_comp * 6))
+            #self.input_linear = L.Linear(1 + n_mdn_comp * 6) # end_of_stroke + 6 parameters per Gaussian
+            self.mdn_W = chainer.Parameter(chainer.initializers.Normal(0.075), (1 + n_mdn_comp * 6, n_units))
+            self.mdn_b = chainer.Parameter(chainer.initializers.Normal(0.075), (1 + n_mdn_comp * 6))
 
         self.n_mdn_comp = n_mdn_comp
         self.n_unit = n_units
