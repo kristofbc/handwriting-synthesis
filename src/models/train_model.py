@@ -518,7 +518,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
     """ Create the data iterators """
     train_iter = chainer.iterators.SerialIterator(train_set, batch_size, repeat=True, shuffle=True)
-    valid_iter = chainer.iterators.SerialIterator(valid_set, batch_size, repeat=False, shuffle=True)
+    valid_iter = chainer.iterators.SerialIterator(valid_set, batch_size, repeat=True, shuffle=True)
 
     """ Start training """
     xp.random.seed(random_seed)
@@ -529,7 +529,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     history_train = []
     history_valid = []
 
-    logger.info("Starting training with {0} mini-batches for {1} epochs".format(round(len(train_set)/batch_size), epochs))
+    logger.info("Starting training with {0} mini-batches for {1} epochs".format(math.ceil(len(train_set)/batch_size), epochs))
     while train_iter.epoch < epochs:
         epoch = train_iter.epoch
         batch = np.asarray(train_iter.next())
@@ -554,7 +554,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
         loss = cuda.to_cpu(loss_t.data)
         history_train.append([loss, time_iteration_end])
         model.reset_state()
-        logger.info("[TRAIN] Epoch #{0} ({1}/{2}): loss = {3}, time = {4}".format(epoch+1, len(history_train), round(len(train_set)/batch_size), loss, time_iteration_end))
+        logger.info("[TRAIN] Epoch #{0} ({1}/{2}): loss = {3}, time = {4}".format(epoch+1, len(history_train), math.ceil(len(train_set)/batch_size), loss, time_iteration_end))
 
         # Check of epoch is completed: all the mini-batches are completed
         if train_iter.is_new_epoch:
@@ -572,19 +572,25 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             # Check if we should validate the data
             if epoch % validation_interval == 0:
                 with chainer.using_config('train', False) and chainer.no_backprop_mode():
-                    for valid_batch in valid_iter:
+                    while True:
+                    #for valid_batch in valid_iter:
                         time_iteration_start = time.time()
 
                         # Unpack the validation data
+                        valid_batch = np.asarray(valid_iter.next())
                         valid_data_batch, valid_characters_batch = pad_data(valid_batch[:, 0], valid_batch[:, 1])
                         valid_cs_data = one_hot(valid_data_batch, valid_characters, n_chars, n_max_seq_length)
 
                         # Train the batch
                         model([valid_data_batch, valid_characters_batch, valid_cs_data])
                         time_iteration_end = time.time()-time_iteration_start
-                        loss = cuda.to_cpu(model.loss)
+                        loss = cuda.to_cpu(model.loss.data)
                         history_valid.append([loss, time_iteration_end])
-                        logger.info("[VALID] Epoch #{0} ({1}/{2}): loss = {3}, time = {4}".format(epoch+1, len(history_valid), round(len(valid_set)/batch_size), loss, time_iteration_end))
+                        logger.info("[VALID] Epoch #{0} ({1}/{2}): loss = {3}, time = {4}".format(epoch+1, len(history_valid), math.ceil(len(valid_set)/batch_size), loss, time_iteration_end))
+
+                        model.reset_state()
+                        if valid_iter.is_new_epoch:
+                            break
 
                     # All the validation mini-batches are processed
                     history_valid = np.asarray(history_valid)
@@ -595,14 +601,14 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                     valid_med = np.median(history_valid)
                     valid_time_sum = history_valid[:, 1].sum()
                     history_network_valid.append([valid_mean, valid_std, valid_min, valid_max, valid_med, valid_time_sum])
-                    logger.info("[TRAIN] Epoch #{0} (COMPLETED IN {1}): mean = {2}, std = {3}, min = {4}, max = {5}, med = {6}"
+                    logger.info("[VALID] Epoch #{0} (COMPLETED IN {1}): mean = {2}, std = {3}, min = {4}, max = {5}, med = {6}"
                                 .format(epoch+1, valid_time_sum, valid_mean, valid_std, valid_min, valid_max, valid_med))
 
                     valid_iter.reset()
-                    model.reset_state()
 
             # Check if we should save the data
             if epoch % save_interval == 0:
+                logger.info("Saving the model, optimizer and history")
                 save_dir = output_dir + '/' + model_suffix_dir
                 if not os.path.exists(save_dir):
                     os.makedirs(save_dir)
@@ -627,7 +633,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
 
 @click.command()
-@click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWritingSM', help='Directory containing the data.')
+@click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWriting', help='Directory containing the data.')
 @click.option('--output_dir', type=click.Path(exists=False), default='models', help='Directory for model checkpoints.')
 @click.option('--batch_size', type=click.INT, default=64, help='Size of the mini-batches.')
 @click.option('--peephole', type=click.INT, default=0, help='LSTM with Peephole.')
