@@ -8,6 +8,7 @@ import os
 import click
 import logging
 import math
+import copy
 
 import numpy as np
 import cPickle as pickle
@@ -476,26 +477,32 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     n_chars = len(vocab)
 
     """ Create the model """
-    logger.info("Creating the model")
-    if peephole == 0:
-        model = Model(rnn_cells_number, mix_comp_number, win_unit_number)    
-    #else:
-        #model = ModelPeephole(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number)
+    def op_models(models, op, *args):
+        rets = []
+        for i in xrange(len(models)):
+            rets.append(op(i, models[i], *args))
 
-    """ Enable cupy, if available """
-    if gpu > -1:
-        logger.info("Enabling CUpy")
-        chainer.cuda.get_device_from_id(gpu).use()
-        xp = cupy
-        model.to_gpu()
-    else:
-        xp = np
+        return rets
+
+    gpu = gpu.split(',')
+    logger.info("Creating {0} model(s)".format(len(gpu)))
+    models = []
+    for i in xrange(len(gpu)):
+        if i == 0:
+            if peephole == 0:
+                models.append(Model(rnn_cells_number, mix_comp_number, win_unit_number))
+            else:
+                raise ValueError("Peephole is not yet supported")
+                #model = ModelPeephole(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number)
+        else:
+            models.append(copy.deepcopy(models[0]))
 
     """ Setup the model """
-    logger.info("Setuping the model")
+    logger.info("Setuping {0} model(s)".format(len(gpu)))
+    # Optimizer is only on the "master" model
     #optimizer = chainer.optimizers.Adam(alpha=0.001, beta1=0.90, beta2=0.999, eps=1e-08)
     optimizer = chainer.optimizers.Adam()
-    optimizer.setup(model)
+    optimizer.setup(models[0])
 
     if grad_clip is not 0:
         optimizer.add_hook(chainer.optimizers.GradientClipping(grad_clip))
@@ -504,8 +511,24 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
         logger.info("Loading state from {}".format(output_dir + '/' + resume_dir))
         if resume_model != "":
             chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_model, model)
+
+            if len(models) > 1:
+                for i in models[1:]:
+                    models[i] = copy.deepcopy(models[0])
+
         if resume_optimizer != "":
             chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_optimizer, optimizer)
+
+    """ Enable cupy, if available """
+    for i in xrange(len(gpu)):
+        if int(gpu[i]) > -1:
+            logger.info("Enabling CUpy for model #{0}".format(i))
+            #chainer.cuda.get_device_from_id(gpu).use()
+            #xp = cupy
+            model.to_gpu(int(gpu[i]))
+            xp = np
+        else:
+            xp = np
 
     """ Prepare data """
     sets = []
@@ -541,19 +564,35 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
         # Train the batch
         #optimizer.update(model, [train_data_batch, train_characters_batch, cs_data])
-        loss_t = model([train_data_batch, train_characters_batch, cs_data])
+        losses = op_models(models, 
+                  lambda i, model, b_size: model([train_data_batch[i*b_size:(i+1)*b_size], train_characters_batch[i*b_size:(i+1)*b_size], cs_data]), 
+                  batch_size/len(models))
 
         # Truncated back-prop at each time-step
-        model.cleargrads()
-        loss_t.backward()
-        loss_t.unchain_backward()
+        op_models(models, lambda i, model: model.cleargrads())
+        op_models(losses, lambda i, loss: loss.backward())
+        op_models(losses, lambda i, loss: loss.unchain_backward())
+
+        if len(models) > 1:
+            op_models(models[0:1], 
+                      lambda i, model, models: [model.addgrads(models[j]) for j in xrange(len(models))], 
+                      models[1:])
+
         optimizer.update()
+
+        if len(models) > 1:
+            op_models(models[1:], 
+                      lambda i, model, master: model.copyparams(master), 
+                      models[0])
 
         time_iteration_end = time.time()-time_iteration_start
         #loss = cuda.to_cpu(model.loss.data)
-        loss = cuda.to_cpu(loss_t.data)
+        loss = op_models(models, lambda i, model: cuda.to_cpu(model.loss.data))
+        loss = np.asarray(loss).sum()
         history_train.append([loss, time_iteration_end])
-        model.reset_state()
+
+        op_models(models, lambda i, model: model.reset_state())
+
         logger.info("[TRAIN] Epoch #{0} ({1}/{2}): loss = {3}, time = {4}".format(epoch+1, len(history_train), math.ceil(len(train_set)/batch_size), loss, time_iteration_end))
 
         # Check of epoch is completed: all the mini-batches are completed
@@ -582,13 +621,13 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                         valid_cs_data = one_hot(valid_data_batch, valid_characters, n_chars, n_max_seq_length)
 
                         # Train the batch
-                        model([valid_data_batch, valid_characters_batch, valid_cs_data])
+                        models[0]([valid_data_batch, valid_characters_batch, valid_cs_data])
                         time_iteration_end = time.time()-time_iteration_start
-                        loss = cuda.to_cpu(model.loss.data)
+                        loss = cuda.to_cpu(models[0].loss.data)
                         history_valid.append([loss, time_iteration_end])
                         logger.info("[VALID] Epoch #{0} ({1}/{2}): loss = {3}, time = {4}".format(epoch+1, len(history_valid), math.ceil(len(valid_set)/batch_size), loss, time_iteration_end))
 
-                        model.reset_state()
+                        models[0].reset_state()
                         if valid_iter.is_new_epoch:
                             break
 
@@ -614,7 +653,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                     os.makedirs(save_dir)
 
                 # Save the model and optimizer
-                np.save(save_dir + '/model-{}'.format(epoch+1), model)
+                np.save(save_dir + '/model-{}'.format(epoch+1), models[0])
                 np.save(save_dir + '/state-{}'.format(epoch+1), optimizer)
 
                 # Save the stats
@@ -633,7 +672,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
 
 @click.command()
-@click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWriting', help='Directory containing the data.')
+@click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWritingSM', help='Directory containing the data.')
 @click.option('--output_dir', type=click.Path(exists=False), default='models', help='Directory for model checkpoints.')
 @click.option('--batch_size', type=click.INT, default=64, help='Size of the mini-batches.')
 @click.option('--peephole', type=click.INT, default=0, help='LSTM with Peephole.')
@@ -642,7 +681,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 @click.option('--resume_dir', type=click.STRING, default='', help='Directory name for resuming the optimization from a snapshot.')
 @click.option('--resume_model', type=click.STRING, default='', help='Name of the model snapshot.')
 @click.option('--resume_optimizer', type=click.STRING, default='', help='Name of the optimizer snapshot.')
-@click.option('--gpu', type=click.INT, default=-1, help='GPU ID (negative value is CPU).')
+@click.option('--gpu', type=click.STRING, default="-1", help='GPU ID (negative value is CPU).')
 @click.option('--adaptive_noise', type=click.INT, default=1, help='Use Adaptive Weight Noise in the training process.')
 @click.option('--update_weight', type=click.INT, default=1, help='Update weights in the training process.')
 @click.option('--use_weight_noise', type=click.INT, default=1, help='Use weight noise in the training process.')
