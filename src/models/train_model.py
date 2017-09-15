@@ -427,7 +427,7 @@ class Model(chainer.Chain):
 
             # MDN
             loss += self.mdn([x, x_next])
-            print(loss)
+            #print(loss)
 
         loss /= (batch_size * t_max)
         self.loss = loss
@@ -525,7 +525,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             logger.info("Enabling CUpy for model #{0}".format(i))
             #chainer.cuda.get_device_from_id(gpu).use()
             #xp = cupy
-            model.to_gpu(int(gpu[i]))
+            models[i].to_gpu(int(gpu[i]))
             xp = np
         else:
             xp = np
@@ -564,9 +564,19 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
         # Train the batch
         #optimizer.update(model, [train_data_batch, train_characters_batch, cs_data])
-        losses = op_models(models, 
-                  lambda i, model, b_size: model([train_data_batch[i*b_size:(i+1)*b_size], train_characters_batch[i*b_size:(i+1)*b_size], cs_data]), 
-                  batch_size/len(models))
+        def train_model(i, model, b_size):
+            t_d_batch = train_data_batch[i*b_size:(i+1)*b_size]
+            t_c_batch = train_characters_batch[i*b_size:(i+1)*b_size]
+            cs_d_batch = cs_data[i*b_size:(i+1)*b_size]
+
+            if model.xp != np:
+                t_d_batch = cuda.to_gpu(t_d_batch, gpu[i])
+                t_c_batch = cuda.to_gpu(t_c_batch, gpu[i])
+                cs_d_batch = cuda.to_gpu(cs_d_batch, gpu[i])
+            
+            model([t_d_batch, t_c_batch, cs_d_batch])
+
+        losses = op_models(models, train_model, batch_size/len(models))
 
         # Truncated back-prop at each time-step
         op_models(models, lambda i, model: model.cleargrads())
@@ -672,7 +682,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
 
 @click.command()
-@click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWritingSM', help='Directory containing the data.')
+@click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWriting', help='Directory containing the data.')
 @click.option('--output_dir', type=click.Path(exists=False), default='models', help='Directory for model checkpoints.')
 @click.option('--batch_size', type=click.INT, default=64, help='Size of the mini-batches.')
 @click.option('--peephole', type=click.INT, default=0, help='LSTM with Peephole.')
