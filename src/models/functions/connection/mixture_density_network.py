@@ -36,7 +36,7 @@ class MixtureDensityNetworkFunction(function.Function):
         z_rho = xp.tanh(rho_input)
         #z_pi = xp.softmax(pi_input)
         z_pi = xp.exp(pi_input)
-        z_pi = z_pi / xp.sum(z_pi, 1, keepdims=True)
+        z_pi = z_pi / (xp.sum(z_pi, 1, keepdims=True) + 1e-10)
         z_mu_x1 = mu_x1_input
         z_mu_x2 = mu_x2_input
 
@@ -63,7 +63,7 @@ class MixtureDensityNetworkFunction(function.Function):
         self.z = z
         
         # Normal function. Eq. 24.
-        inv_ro = 1. - xp.square(z_rho)
+        inv_ro = (1. - xp.square(z_rho)) + 1e-10
         n_left = 2. * np.pi * z_s_x1 * z_s_x2 * xp.sqrt(inv_ro) + 1e-10 # + 1e-10 for computational stability
         n_right = xp.exp(-z / (2. * inv_ro))
         n = n_right / n_left
@@ -94,57 +94,6 @@ class MixtureDensityNetworkFunction(function.Function):
         loss *= mask
 
         return loss, x, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho,
-
-        """ Sample from the mixture to predict the next position """
-        with chainer.no_backprop_mode():
-            x_pred = xp.zeros((x.shape))
-
-            for k in xrange(len(z_pi)):
-                # Select the most probable id from the mixture
-                treshold_idx = 0.10 # Randomly chosen treshold
-                #idx = xp.argmax(z_pi[k])
-                idx = z_pi[k].argmax()
-                #summation = 0
-                #idx = -1
-                #for i in xrange(len(z_pi[k])):
-                #    summation += z_pi[k][i]
-                #    if summation >= treshold_idx:
-                #       idx = i
-                #       break
-
-                #if idx == -1:
-                #    raise ValueError("Unable to find the maximum index")
-
-                # Get the next x1, x2
-                mean = xp.asarray([z_mu_x1[k][idx], z_mu_x2[k][idx]], dtype=xp.float32)
-                covar = xp.asarray([[z_s_x1[k][idx]*z_s_x1[k][idx], z_rho[k][idx]*z_s_x1[k][idx]*z_s_x2[k][idx]], [z_rho[k][idx]*z_s_x1[k][idx]*z_s_x2[k][idx], z_s_x2[k][idx]*z_s_x2[k][idx]]], dtype=xp.float32)
-
-                # Custom implementation of multivariate normal for CuPy
-                #x_normal = np.random.multivariate_normal(mean, covar, 1)
-                shape = [1] # Size of sampling
-                final_shape = list(shape[:])
-                final_shape.append(mean.shape[0])
-                x_normal = xp.random.standard_normal(final_shape).reshape(-1, mean.shape[0])
-                
-                # Decompose the matrix, Singular Value Decomposition
-                (u, s, v) = xp.linalg.svd(covar)
-
-                x_normal = xp.dot(x_normal, xp.sqrt(s)[:, None] * v)
-                x_normal += mean
-                x_normal = xp.reshape(x_normal, tuple(final_shape))
-
-                # Sample from the distribution the next values
-                x1_next, x2_next = x_normal[0][0], x_normal[0][1]
-
-                # Get the next eos
-                treshold_eos = 0.10 # Randomly chosen treshold
-                x3_next = 1 if treshold_eos < z_eos[k][0] else 0
-
-                x_pred[k, 0] = x1_next
-                x_pred[k, 1] = x2_next
-                x_pred[k, 2] = x3_next
-
-        return loss, x_pred, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho,
 
     def backward(self, inputs, grad_outputs):
         xp = cuda.get_array_module(*inputs)
@@ -181,6 +130,21 @@ class MixtureDensityNetworkFunction(function.Function):
         g_rho = - self.gamma * (d_norm_x1*d_norm_x2 + self.z_rho*(1. - C * self.z)) * self.mask
         
         # Add grad_clipping here if it explodes P.23
+        th_min = -100.0
+        th_max = 100.0
+        def clip_grad(value, th_min, th_max):
+            # @NOTE: Prevent nan?
+            value = xp.where(xp.isnan(value), 1e-10, value)
+            value = xp.clip(value, th_min, th_max)
+            return value
+        
+        g_eos = clip_grad(g_eos, th_min, th_max)
+        g_pi = clip_grad(g_pi, th_min, th_max)
+        g_mu_x1 = clip_grad(g_mu_x1, th_min, th_max)
+        g_mu_x2 = clip_grad(g_mu_x2, th_min, th_max)
+        g_s_x1 = clip_grad(g_s_x1, th_min, th_max)
+        g_s_x2 = clip_grad(g_s_x2, th_min, th_max)
+        g_rho = clip_grad(g_rho, th_min, th_max)
 
         return None, g_eos, g_pi, g_mu_x1, g_mu_x2, g_s_x1, g_s_x2, g_rho,
 
