@@ -80,11 +80,10 @@ def pad_data(data, characters):
         tmp1.append(np.asarray(data[i]))
         tmp2.append(np.asarray(characters[i]))
     
-    return np.asarray(tmp1), np.asarray(tmp2) 
+    return np.asarray(tmp1).astype(np.float32), np.asarray(tmp2) 
 
 def one_hot(data, characters, n_chars, n_max_seq_length):
-    xp = cuda.get_array_module(*data)
-    cs = xp.zeros((len(data), n_chars, n_max_seq_length), dtype=xp.float32)
+    cs = np.zeros((len(data), n_chars, n_max_seq_length), dtype=np.float32)
 
     for i in xrange(len(data)):
         for j in xrange(len(characters[i])):
@@ -217,7 +216,8 @@ class SoftWindow(chainer.Link):
         K = a_h.shape[1]
 
         if self.k_prev is None:
-            self.k_prev = variable.Variable(self.xp.zeros_like(k_h, dtype=self.xp.float32))
+            with cuda.get_device_from_id(self._device_id):
+                self.k_prev = variable.Variable(self.xp.zeros_like(k_h, dtype=self.xp.float32))
 
         self.w, self.k_prev, self.phi = SoftWindowFunction()(a_h, b_h, k_h, cs, self.k_prev)
 
@@ -399,17 +399,18 @@ class Model(chainer.Chain):
             Returns:
                 loss (float)
         """
-        data, characters, cs_data = inputs
+        data, cs_data = inputs
         batch_size, t_max, x_dim = data.shape
 
-        # Create the one-hot encoding
-        cs = variable.Variable(self.xp.asarray(cs_data))
+        with cuda.get_device_from_id(self._device_id):
+            cs = variable.Variable(cs_data)
 
         # Train all samples in batch
         loss = 0
         for t in xrange(t_max-1):
-            x_now = variable.Variable(self.xp.asarray(data[:, t, :], dtype=self.xp.float32))
-            x_next = variable.Variable(self.xp.asarray(data[:, t+1, :], dtype=self.xp.float32))
+            with cuda.get_device_from_id(self._device_id):
+                x_now = variable.Variable(data[:, t, :])
+                x_next = variable.Variable(data[:, t+1, :])
 
             # LSTM1
             x = self.lstm1(x_now)
@@ -560,21 +561,19 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
         
         # Unpack the training data
         train_data_batch, train_characters_batch = pad_data(batch[:, 0], batch[:, 1])
-        cs_data = one_hot(train_data_batch, train_characters, n_chars, n_max_seq_length)
+        cs_data = one_hot(train_data_batch, train_characters_batch, n_chars, n_max_seq_length)
 
         # Train the batch
         #optimizer.update(model, [train_data_batch, train_characters_batch, cs_data])
         def train_model(i, model, b_size):
             t_d_batch = train_data_batch[i*b_size:(i+1)*b_size]
-            t_c_batch = train_characters_batch[i*b_size:(i+1)*b_size]
             cs_d_batch = cs_data[i*b_size:(i+1)*b_size]
 
             if model.xp != np:
-                t_d_batch = cuda.to_gpu(t_d_batch, gpu[i])
-                t_c_batch = cuda.to_gpu(t_c_batch, gpu[i])
-                cs_d_batch = cuda.to_gpu(cs_d_batch, gpu[i])
+                t_d_batch = cuda.to_gpu(t_d_batch.copy(), gpu[i])
+                cs_d_batch = cuda.to_gpu(cs_d_batch.copy(), gpu[i])
             
-            model([t_d_batch, t_c_batch, cs_d_batch])
+            model([t_d_batch, cs_d_batch])
 
         losses = op_models(models, train_model, batch_size/len(models))
 
