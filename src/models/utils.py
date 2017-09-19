@@ -35,7 +35,6 @@ def clip_grad(value, th_min, th_max, batch_size=None, xp=np):
             'T value, T th_min, T th_max',
             'T res',
             '''
-                COMMON_ROUTINE;
                 T vmax = fabsf(value) + 1e-10;
                 T rate = (vmax>th_max) ? th_max / vmax : 1.0;
                 res = value * rate;
