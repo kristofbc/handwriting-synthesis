@@ -139,7 +139,7 @@ class LSTM(function.Function):
             gc_prev = xp.empty_like(c_prev)
             cuda.elementwise(
                 'T c_prev, T c, T gc, T gh, T a, T i_, T f, T o',
-                'T gc_prev, T ga, T gi, T gf, T go, T res',
+                'T gc_prev, T ga, T gi, T gf, T go',
                 '''
                     COMMON_ROUTINE;
                     T co = tanh(c);
