@@ -596,9 +596,9 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                       models[0])
 
         time_iteration_end = time.time()-time_iteration_start
-        #loss = cuda.to_cpu(model.loss.data)
-        loss = op_models(models, lambda i, model: cuda.to_cpu(model.loss.data))
-        loss = np.asarray(loss).sum()
+        loss = cuda.to_cpu(models[0].loss.data)
+        #loss = op_models(models, lambda i, model: cuda.to_cpu(model.loss.data))
+        #loss = np.asarray(loss).sum()
         history_train.append([loss, time_iteration_end])
 
         op_models(models, lambda i, model: model.reset_state())
