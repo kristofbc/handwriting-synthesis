@@ -7,6 +7,8 @@ from chainer import function
 import numpy as np
 #from chainer import function_node
 
+from utils import clip_grad
+
 #class MixtureDensityNetworkFunction(function_node.FunctionNode):
 class MixtureDensityNetworkFunction(function.Function):
 
@@ -132,19 +134,14 @@ class MixtureDensityNetworkFunction(function.Function):
         # Add grad_clipping here if it explodes P.23
         th_min = -100.0
         th_max = 100.0
-        def clip_grad(value, th_min, th_max):
-            # @NOTE: Prevent nan?
-            value = xp.where(xp.isnan(value), 1e-10, value)
-            value = xp.clip(value, th_min, th_max)
-            return value
-        
-        g_eos = clip_grad(g_eos, th_min, th_max)
-        g_pi = clip_grad(g_pi, th_min, th_max)
-        g_mu_x1 = clip_grad(g_mu_x1, th_min, th_max)
-        g_mu_x2 = clip_grad(g_mu_x2, th_min, th_max)
-        g_s_x1 = clip_grad(g_s_x1, th_min, th_max)
-        g_s_x2 = clip_grad(g_s_x2, th_min, th_max)
-        g_rho = clip_grad(g_rho, th_min, th_max)
+
+        g_eos = clip_grad(g_eos, th_min, th_max, pi_input.shape[0])
+        g_pi = clip_grad(g_pi, th_min, th_max, pi_input.shape[0])
+        g_mu_x1 = clip_grad(g_mu_x1, th_min, th_max, pi_input.shape[0])
+        g_mu_x2 = clip_grad(g_mu_x2, th_min, th_max, pi_input.shape[0])
+        g_s_x1 = clip_grad(g_s_x1, th_min, th_max, pi_input.shape[0])
+        g_s_x2 = clip_grad(g_s_x2, th_min, th_max, pi_input.shape[0])
+        g_rho = clip_grad(g_rho, th_min, th_max, pi_input.shape[0])
 
         return None, g_eos, g_pi, g_mu_x1, g_mu_x2, g_s_x1, g_s_x2, g_rho,
 
