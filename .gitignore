@@ -1,6 +1,7 @@
 # Project
 models
 .python-version
+reports
 
 # General
 *.DS_Store
