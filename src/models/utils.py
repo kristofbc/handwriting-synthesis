@@ -28,15 +28,15 @@ def clip_grad(value, th_min, th_max, batch_size=None, xp=np):
         res = value * rate
     else:
         # GPU clipping
-        cuda.elementwise(
-            'T value, T th_min, T th_max'
+        res = cuda.elementwise(
+            'T value, T th_min, T th_max',
             'T res',
             '''
                 COMMON_ROUTINE;
-                vmax = fabsf(value)
-                rate = (vmax>th_max) ? th_max / vmax : 1.0
-                res = value * rate
+                T vmax = fabsf(value);
+                T rate = (vmax>th_max) ? th_max / vmax : 1.0;
+                res = value * rate;
             ''',
-            'clip_grad_kern')(value, th_min, th_max, res)
+            'clip_grad_kern')(value, th_min, th_max)
         
     return res
