@@ -138,7 +138,7 @@ class LSTM(function.Function):
             a, i, f, o = _extract_gates(x)
             gc_prev = xp.empty_like(c_prev)
             cuda.elementwise(
-                'T c_prev, T c, T gc, T gh, T a, T i_, T f, T o, T value, T th_min, T th_max',
+                'T c_prev, T c, T gc, T gh, T a, T i_, T f, T o',
                 'T gc_prev, T ga, T gi, T gf, T go, T res',
                 '''
                     COMMON_ROUTINE;
@@ -149,8 +149,6 @@ class LSTM(function.Function):
                     gf = temp * c_prev * grad_sigmoid(af);
                     go = gh * co * grad_sigmoid(ao);
                     gc_prev = temp * af;
-
-                    
                 ''',
                 'lstm_bwd', preamble=_preamble)(
                     c_prev[:batch], self.c, gc_update, gh, a, i, f, o,
