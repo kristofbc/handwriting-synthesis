@@ -135,13 +135,13 @@ class MixtureDensityNetworkFunction(function.Function):
         th_min = -100.0
         th_max = 100.0
 
-        g_eos = clip_grad(g_eos, th_min, th_max, pi_input.shape[0])
-        g_pi = clip_grad(g_pi, th_min, th_max, pi_input.shape[0])
-        g_mu_x1 = clip_grad(g_mu_x1, th_min, th_max, pi_input.shape[0])
-        g_mu_x2 = clip_grad(g_mu_x2, th_min, th_max, pi_input.shape[0])
-        g_s_x1 = clip_grad(g_s_x1, th_min, th_max, pi_input.shape[0])
-        g_s_x2 = clip_grad(g_s_x2, th_min, th_max, pi_input.shape[0])
-        g_rho = clip_grad(g_rho, th_min, th_max, pi_input.shape[0])
+        g_eos = clip_grad(g_eos, th_min, th_max, pi_input.shape[0], xp)
+        g_pi = clip_grad(g_pi, th_min, th_max, pi_input.shape[0], xp)
+        g_mu_x1 = clip_grad(g_mu_x1, th_min, th_max, pi_input.shape[0], xp)
+        g_mu_x2 = clip_grad(g_mu_x2, th_min, th_max, pi_input.shape[0], xp)
+        g_s_x1 = clip_grad(g_s_x1, th_min, th_max, pi_input.shape[0], xp)
+        g_s_x2 = clip_grad(g_s_x2, th_min, th_max, pi_input.shape[0], xp)
+        g_rho = clip_grad(g_rho, th_min, th_max, pi_input.shape[0], xp)
 
         return None, g_eos, g_pi, g_mu_x1, g_mu_x2, g_s_x1, g_s_x2, g_rho,
 

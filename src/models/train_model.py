@@ -429,7 +429,7 @@ class Model(chainer.Chain):
 
             # MDN
             loss += self.mdn([x, x_next])
-            print(loss)
+            #print(loss)
 
         loss /= (batch_size * t_max)
         self.loss = loss
