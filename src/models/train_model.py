@@ -36,6 +36,7 @@ from net.functions.adaptive_weight_noise import adaptive_weight_noise
 from net.functions.soft_window import soft_window
 #from net.functions.mixture_density_outputs import mixture_density_outputs
 from functions.connection.mixture_density_network import mixture_density_network
+from links.connection.lstm import LSTM
 
 INPUT_SIZE = 3 # (x, y, end_of_stroke)
 
@@ -336,6 +337,8 @@ class MixtureDensityNetwork(chainer.Link):
         return loss
         
 
+#class LSTM
+
 # =============
 # Models (mdls)
 # ============= 
@@ -363,9 +366,9 @@ class Model(chainer.Chain):
 
         with self.init_scope():
             # LSTMs layers
-            self.lstm1 = L.LSTM(n_units)
-            self.lstm2 = L.LSTM(n_units)
-            self.lstm3 = L.LSTM(n_units)
+            self.lstm1 = LSTM(n_units)
+            self.lstm2 = LSTM(n_units)
+            self.lstm3 = LSTM(n_units)
             
             # Attention mechanism
             self.sw = SoftWindow(n_window_unit, n_units)
