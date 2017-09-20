@@ -617,8 +617,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                     os.makedirs(save_dir)
 
                 # Save the model and optimizer
-                np.save(save_dir + '/model-{}'.format(epoch+1), model)
-                np.save(save_dir + '/state-{}'.format(epoch+1), optimizer)
+                chainer.serializers.save_npz(save_dir + '/model-{}'.format(epoch+1), model)
+                chainer.serializers.save_npz(save_dir + '/state-{}'.format(epoch+1), optimizer)
 
                 # Save the stats
                 np.save(save_dir + '/history-network-train', np.asarray(history_network_train))
