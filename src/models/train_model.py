@@ -658,7 +658,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 @click.option('--win_unit_number', type=click.INT, default=10, help='Number of soft-window components.')
 @click.option('--mix_comp_number', type=click.INT, default=20, help='Numver of Gaussian components for mixture density output.')
 @click.option('--random_seed', type=click.INT, default=None, help='Number of Gaussian components for mixture density output.')
-@click.option('--learning_rate', type=click.INT, default=0.001, help='Learning rate of the optimizer.')
+@click.option('--learning_rate', type=click.FLOAT, default=0.001, help='Learning rate of the optimizer.')
 @click.option('--debug', type=click.INT, default=0, help='Chainer debugging mode.')
 def cli(**kwargs):
     main(**kwargs)
