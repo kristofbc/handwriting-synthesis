@@ -146,8 +146,9 @@ class MixtureDensityNetworkFunction(function.Function):
         x2 = x[:, 1:2]
         x3 = x[:, 2:3]
 
-        # From eq. 27 to 37
-        C = 1. / (1. - rho_input*rho_input + 1e-10)
+        #if xp == np:
+            # From eq. 27 to 37
+        C = 1. / (1. - self.z_rho*self.z_rho + 1e-10)
         d_norm_x1 = (x1 - self.z_mu_x1) / self.z_s_x1
         d_norm_x2 = (x2 - self.z_mu_x2) / self.z_s_x2
         d_rho_norm_x1 = self.z_rho * d_norm_x1
@@ -160,6 +161,13 @@ class MixtureDensityNetworkFunction(function.Function):
         g_s_x1 = - self.gamma * ((C*d_norm_x1) * (d_norm_x1 - d_rho_norm_x2) - 1.) * self.mask
         g_s_x2 = - self.gamma * ((C*d_norm_x2) * (d_norm_x2 - d_rho_norm_x1) - 1.) * self.mask
         g_rho = - self.gamma * (d_norm_x1*d_norm_x2 + self.z_rho*(1. - C * self.z)) * self.mask
+        
+        #else:
+        #    g_eos, g_pi, g_mu_x1, g_mu_x2, g_s_x1, g_s_x2, g_rho = cuda.elementwise(
+        #        'T x1, T x2, T eos_input, T pi_input, T mu_x1_input, T mu_x2_input, T s_x1_input, T s_x2_input, T rho_input',
+        #        'T g_eos, T g_pi, T g_mu_x1, T g_mu_x2, T g_s_x1, T g_s_x2, T g_rho',
+
+        #    )
         
         # Add grad_clipping here if it explodes P.23
         th_min = -100.0
