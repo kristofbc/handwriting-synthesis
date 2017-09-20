@@ -13,7 +13,37 @@ from utils import clip_grad
 class MixtureDensityNetworkFunction(function.Function):
 
     def check_type_forward(self, in_types):
-        #print("check type")
+        type_check.expect(in_types.size() == 8)
+        x_type, eos_input_type, pi_input_type, mu_x1_input_type, mu_x2_input_type, s_x1_input_type, s_x2_input_type, rho_input_type = in_types
+
+        type_check.expect(
+            x_type.dtype.kind == 'f',
+            eos_input_type.dtype.kind == 'f',
+            pi_input_type.dtype.kind == 'f',
+            mu_x1_input_type.dtype.kind == 'f',
+            mu_x2_input_type.dtype.kind == 'f',
+            s_x1_input_type.dtype.kind == 'f',
+            s_x2_input_type.dtype.kind == 'f',
+            rho_input_type.dtype.kind == 'f',
+
+            x_type.ndim >= 2,
+            eos_input_type.ndim >= 2,
+
+            x_type.shape[0] == eos_input_type.shape[0],
+            x_type.shape[0] == pi_input_type.shape[0],
+            x_type.shape[0] == mu_x1_input_type.shape[0],
+            x_type.shape[0] == mu_x2_input_type.shape[0],
+            x_type.shape[0] == s_x1_input_type.shape[0],
+            x_type.shape[0] == s_x2_input_type.shape[0],
+            x_type.shape[0] == rho_input_type.shape[0],
+
+            pi_input_type.shape[1] == mu_x1_input_type.shape[1],
+            mu_x1_input_type.shape[1] == mu_x2_input_type.shape[1],
+            mu_x2_input_type.shape[1] == s_x1_input_type.shape[1],
+            s_x1_input_type.shape[1] == s_x2_input_type.shape[1],
+            s_x2_input_type.shape[1] == rho_input_type.shape[1]
+        )
+
         pass
     
     def forward(self, inputs):
@@ -33,12 +63,12 @@ class MixtureDensityNetworkFunction(function.Function):
 
         # Get MDN coeff. Eq #18 to #22
         z_eos = 1. / (1. + xp.exp(eos_input)) # F.sigmoid. NOTE: usually sigmoid is 1/(1+e^-x). Here 'x' is >0!
-        z_s_x1 = xp.exp(s_x1_input)
-        z_s_x2 = xp.exp(s_x2_input)
+        z_s_x1 = xp.exp(s_x1_input) + 1e-10
+        z_s_x2 = xp.exp(s_x2_input) + 1e-10
         z_rho = xp.tanh(rho_input)
         #z_pi = xp.softmax(pi_input)
         z_pi = xp.exp(pi_input)
-        z_pi = z_pi / (xp.sum(z_pi, 1, keepdims=True) + 1e-10)
+        z_pi = z_pi / xp.sum(z_pi, 1, keepdims=True)
         z_mu_x1 = mu_x1_input
         z_mu_x2 = mu_x2_input
 
@@ -65,7 +95,7 @@ class MixtureDensityNetworkFunction(function.Function):
         self.z = z
         
         # Normal function. Eq. 24.
-        inv_ro = (1. - xp.square(z_rho)) + 1e-10
+        inv_ro = 1. - xp.square(z_rho) + 1e-10
         n_left = 2. * np.pi * z_s_x1 * z_s_x2 * xp.sqrt(inv_ro) + 1e-10 # + 1e-10 for computational stability
         n_right = xp.exp(-z / (2. * inv_ro))
         n = n_right / n_left
@@ -117,7 +147,7 @@ class MixtureDensityNetworkFunction(function.Function):
         x3 = x[:, 2:3]
 
         # From eq. 27 to 37
-        C = 1. / ((1. - rho_input*rho_input) + 1e-10)
+        C = 1. / (1. - rho_input*rho_input + 1e-10)
         d_norm_x1 = (x1 - self.z_mu_x1) / self.z_s_x1
         d_norm_x2 = (x2 - self.z_mu_x2) / self.z_s_x2
         d_rho_norm_x1 = self.z_rho * d_norm_x1
@@ -135,13 +165,13 @@ class MixtureDensityNetworkFunction(function.Function):
         th_min = -100.0
         th_max = 100.0
 
-        g_eos = clip_grad(g_eos, th_min, th_max, pi_input.shape[0], xp)
-        g_pi = clip_grad(g_pi, th_min, th_max, pi_input.shape[0], xp)
-        g_mu_x1 = clip_grad(g_mu_x1, th_min, th_max, pi_input.shape[0], xp)
-        g_mu_x2 = clip_grad(g_mu_x2, th_min, th_max, pi_input.shape[0], xp)
-        g_s_x1 = clip_grad(g_s_x1, th_min, th_max, pi_input.shape[0], xp)
-        g_s_x2 = clip_grad(g_s_x2, th_min, th_max, pi_input.shape[0], xp)
-        g_rho = clip_grad(g_rho, th_min, th_max, pi_input.shape[0], xp)
+        g_eos = clip_grad(g_eos, th_min, th_max, xp)
+        g_pi = clip_grad(g_pi, th_min, th_max, xp)
+        g_mu_x1 = clip_grad(g_mu_x1, th_min, th_max, xp)
+        g_mu_x2 = clip_grad(g_mu_x2, th_min, th_max, xp)
+        g_s_x1 = clip_grad(g_s_x1, th_min, th_max, xp)
+        g_s_x2 = clip_grad(g_s_x2, th_min, th_max, xp)
+        g_rho = clip_grad(g_rho, th_min, th_max, xp)
 
         return None, g_eos, g_pi, g_mu_x1, g_mu_x2, g_s_x1, g_s_x2, g_rho,
 

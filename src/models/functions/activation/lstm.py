@@ -157,8 +157,8 @@ class LSTM(function.Function):
 
 
         """ CLIP GRADIENT """
-        gc_prev = clip_grad(gc_prev, -10.0, 10.0, x.shape[0], xp)
-        gx = clip_grad(gx, -10.0, 10.0, x.shape[0], xp)
+        gc_prev = clip_grad(gc_prev, -10.0, 10.0, xp)
+        gx = clip_grad(gx, -10.0, 10.0, xp)
 
         return gc_prev, gx
 
