@@ -41,7 +41,7 @@ def clip_grad(value, th_min, th_max, batch_size=None, xp=np):
             ''',
             'clip_grad_kern')(value, th_min, th_max)
 
-        if xp.all(xp.isnan(res)):
-            raise ValueError("NaN detected")
+        #if xp.all(xp.isnan(res)):
+        #    raise ValueError("NaN detected")
         
     return res

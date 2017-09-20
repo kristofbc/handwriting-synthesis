@@ -117,7 +117,7 @@ class MixtureDensityNetworkFunction(function.Function):
         x3 = x[:, 2:3]
 
         # From eq. 27 to 37
-        C = 1. / (1. - rho_input*rho_input)
+        C = 1. / ((1. - rho_input*rho_input) + 1e-10)
         d_norm_x1 = (x1 - self.z_mu_x1) / self.z_s_x1
         d_norm_x2 = (x2 - self.z_mu_x2) / self.z_s_x2
         d_rho_norm_x1 = self.z_rho * d_norm_x1
