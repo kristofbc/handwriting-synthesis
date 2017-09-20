@@ -442,7 +442,7 @@ class Model(chainer.Chain):
 # ===============================================
 
 
-def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_dir, resume_model, resume_optimizer, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, validation_interval, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed, debug):
+def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_dir, resume_model, resume_optimizer, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, validation_interval, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed, learning_rate, debug):
     """ Train the model based on the data saved in ../processed """
     logger = logging.getLogger(__name__)
     logger.info('Training the model')
@@ -497,7 +497,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     """ Setup the model """
     logger.info("Setuping the model")
     #optimizer = chainer.optimizers.Adam(alpha=0.001, beta1=0.90, beta2=0.999, eps=1e-08)
-    optimizer = chainer.optimizers.Adam()
+    optimizer = chainer.optimizers.Adam(alpha=learning_rate)
     optimizer.setup(model)
 
     if grad_clip is not 0:
@@ -658,6 +658,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 @click.option('--win_unit_number', type=click.INT, default=10, help='Number of soft-window components.')
 @click.option('--mix_comp_number', type=click.INT, default=20, help='Numver of Gaussian components for mixture density output.')
 @click.option('--random_seed', type=click.INT, default=None, help='Number of Gaussian components for mixture density output.')
+@click.option('--learning_rate', type=click.INT, default=0.001, help='Learning rate of the optimizer.')
 @click.option('--debug', type=click.INT, default=0, help='Chainer debugging mode.')
 def cli(**kwargs):
     main(**kwargs)
