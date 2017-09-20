@@ -501,7 +501,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     optimizer.setup(model)
 
     if grad_clip is not 0:
-        optimizer.add_hook(chainer.optimizers.GradientClipping(grad_clip))
+        optimizer.add_hook(chainer.optimizer.GradientClipping(grad_clip))
 
     if resume_dir:
         logger.info("Loading state from {}".format(output_dir + '/' + resume_dir))
