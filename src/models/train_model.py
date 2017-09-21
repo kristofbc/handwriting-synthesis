@@ -511,6 +511,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     n_chars = len(vocab)
     history_network_train = []
     history_network_valid = []
+    offset_epoch = 0
 
     """ Create the model """
     logger.info("Creating the model")
@@ -548,6 +549,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
         if resume_stats == 1:
             history_network_train = list(np.load(output_dir + "/" + resume_dir + "/history-network-train.npy"))
             history_network_valid = list(np.load(output_dir + "/" + resume_dir + "/history-network-valid.npy"))
+            offset_epoch = len(history_train)-1
 
     """ Prepare data """
     sets = []
@@ -570,8 +572,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     history_valid = []
 
     logger.info("Starting training with {0} mini-batches for {1} epochs".format(math.ceil(len(train_set)/batch_size), epochs))
-    while train_iter.epoch < epochs:
-        epoch = train_iter.epoch
+    while (train_iter.epoch+offset_epoch) < epochs:
+        epoch = train_iter.epoch + offset_epoch
         batch = np.asarray(train_iter.next())
         time_iteration_start = time.time()
         
