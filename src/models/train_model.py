@@ -6,8 +6,12 @@
 import time
 import os
 import click
-import logging
 import math
+import inspect
+import sys
+import logging
+from logging.handlers import RotatingFileHandler
+from logging import handlers
 
 import numpy as np
 import cPickle as pickle
@@ -39,6 +43,7 @@ from functions.connection.mixture_density_network import mixture_density_network
 from links.connection.lstm import LSTM
 
 INPUT_SIZE = 3 # (x, y, end_of_stroke)
+log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 
 # ==============
 # Helpers (hlps)
@@ -443,18 +448,44 @@ class Model(chainer.Chain):
 
 
 def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_dir, resume_model, resume_optimizer, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, validation_interval, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed, learning_rate, debug):
-    """ Train the model based on the data saved in ../processed """
-    logger = logging.getLogger(__name__)
-    logger.info('Training the model')
+    """ Save the args for this run """
+    arguments = {}
+    frame = inspect.currentframe()
+    args, _, _, values = inspect.getargvalues(frame)
+    for i in args:
+        arguments[i] = values[i]
 
+    # Snapshot directory
+    model_suffix_dir = "{0}-{1}-{2}".format(time.strftime("%Y%m%d-%H%M%S"), 'with_peephole' if peephole == 1 else 'no_peephole', batch_size)
+    training_suffix = "{0}".format("training")
+    state_suffix = "{0}".format("state")
+
+    save_dir = output_dir + '/' + model_suffix_dir
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    """ Setup the global logger """
+    logger = logging.getLogger()
+    logFormatter = logging.Formatter(log_fmt)
+
+    # File logger
+    fh = logging.FileHandler("{0}/logs.txt".format(save_dir))
+    fh.setFormatter(logFormatter)
+    logger.addHandler(fh)
+
+    # stdout logger
+    #ch = logging.StreamHandler(sys.stdout)
+    #ch.setFormatter(logFormatter)
+    #logger.addHandler(ch)
+
+    """ Train the model based on the data saved in ../processed """
+    logger.info("Run arguments")
+    logger.info(arguments)
+    logger.info('Training the model')
     logger.info('Model: {}'.format('with peephole' if peephole == 1 else 'no peephole'))
     logger.info('GPU: {}'.format(gpu))
     logger.info('Mini-batch size: {}'.format(batch_size))
     logger.info('# epochs: {}'.format(epochs))
-
-    model_suffix_dir = "{0}-{1}-{2}".format(time.strftime("%Y%m%d-%H%M%S"), 'with_peephole' if peephole == 1 else 'no_peephole', batch_size)
-    training_suffix = "{0}".format("training")
-    state_suffix = "{0}".format("state")
 
     """ Chainer's debug mode """
     if debug == 1:
@@ -474,6 +505,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     valid_data = load_data(data_dir + "/valid/valid_data")
     valid_characters = load_data(data_dir + "/valid/valid_characters")
     vocab = load_data(data_dir + "/vocabulary")
+
 
     n_max_seq_length = max(get_max_sequence_length(train_characters), get_max_sequence_length(valid_characters))
     n_chars = len(vocab)
@@ -612,9 +644,6 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             # Check if we should save the data
             if epoch % save_interval == 0:
                 logger.info("Saving the model, optimizer and history")
-                save_dir = output_dir + '/' + model_suffix_dir
-                if not os.path.exists(save_dir):
-                    os.makedirs(save_dir)
 
                 # Save the model and optimizer
                 chainer.serializers.save_npz(save_dir + '/model-{}'.format(epoch+1), model)
@@ -665,8 +694,7 @@ def cli(**kwargs):
 
 
 if __name__ == '__main__':
-    log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     #logging.basicConfig(level=logging.INFO, format=log_fmt, stream=sys.stdout)
-    logging.basicConfig(level=logging.INFO, format=log_fmt)
+    logging.basicConfig(level=logging.INFO, format=log_fmt, stream=sys.stdout)
 
     cli()
