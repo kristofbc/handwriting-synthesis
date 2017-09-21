@@ -447,7 +447,7 @@ class Model(chainer.Chain):
 # ===============================================
 
 
-def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_dir, resume_model, resume_optimizer, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, validation_interval, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed, learning_rate, debug):
+def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_dir, resume_model, resume_optimizer, resume_stats, gpu, adaptive_noise, update_weight, use_weight_noise, save_interval, validation_interval, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed, learning_rate, debug):
     """ Save the args for this run """
     arguments = {}
     frame = inspect.currentframe()
@@ -509,6 +509,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
     n_max_seq_length = max(get_max_sequence_length(train_characters), get_max_sequence_length(valid_characters))
     n_chars = len(vocab)
+    history_network_train = []
+    history_network_valid = []
 
     """ Create the model """
     logger.info("Creating the model")
@@ -536,11 +538,16 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
         optimizer.add_hook(chainer.optimizer.GradientClipping(grad_clip))
 
     if resume_dir:
+        # Resume model and optimizer
         logger.info("Loading state from {}".format(output_dir + '/' + resume_dir))
         if resume_model != "":
             chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_model, model)
         if resume_optimizer != "":
             chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_optimizer, optimizer)
+        # Resume statistics
+        if resume_stats == 1:
+            history_network_train = list(np.load(output_dir + "/" + resume_dir + "/history-network-train.npy"))
+            history_network_valid = list(np.load(output_dir + "/" + resume_dir + "/history-network-valid.npy"))
 
     """ Prepare data """
     sets = []
@@ -559,8 +566,6 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     xp.random.seed(random_seed)
     np.random.seed(random_seed)
     time_epoch_start = time.time()
-    history_network_train = []
-    history_network_valid = []
     history_train = []
     history_valid = []
 
@@ -674,6 +679,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 @click.option('--resume_dir', type=click.STRING, default='', help='Directory name for resuming the optimization from a snapshot.')
 @click.option('--resume_model', type=click.STRING, default='', help='Name of the model snapshot.')
 @click.option('--resume_optimizer', type=click.STRING, default='', help='Name of the optimizer snapshot.')
+@click.option('--resume_stats', type=click.INT, default=0, help='Resume the statistics (new stats will be combined with old statistics).')
 @click.option('--gpu', type=click.INT, default=-1, help='GPU ID (negative value is CPU).')
 @click.option('--adaptive_noise', type=click.INT, default=1, help='Use Adaptive Weight Noise in the training process.')
 @click.option('--update_weight', type=click.INT, default=1, help='Update weights in the training process.')
