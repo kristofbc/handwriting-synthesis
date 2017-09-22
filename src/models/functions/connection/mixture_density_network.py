@@ -115,11 +115,11 @@ class MixtureDensityNetworkFunction(function.Function):
         loss_y = xp.sum(loss_y, 1, keepdims=True) + 1e-10 # + 1e-10 for computational stability, != nan
         #epsilon = xp.full(loss_y.shape, 1e-10, dtype=xp.float32)
         #loss_y = xp.maximum(loss_y, epsilon) # Because at the begining loss_y is exactly 0 sometime
-        loss_y = -xp.log(loss_y) 
+        loss_y = -xp.log(loss_y + 1e-10) 
 
         #loss_x = z_eos * x3 + (1. - z_eos) * (1. - x3)
         #loss_x = -xp.log(loss_x)
-        loss_x = -x3 * xp.log(z_eos) - (1. - x3) * xp.log(1. - z_eos)
+        loss_x = -x3 * xp.log(z_eos + 1e-10) - (1. - x3) * xp.log(1. - z_eos + 1e-10)
 
         loss = loss_y + loss_x
 
