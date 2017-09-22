@@ -62,7 +62,8 @@ class MixtureDensityNetworkFunction(function.Function):
         xp = cuda.get_array_module(*inputs)
 
         # Get MDN coeff. Eq #18 to #22
-        z_eos = 1. / (1. + xp.exp(eos_input)) # F.sigmoid. NOTE: usually sigmoid is 1/(1+e^-x). Here 'x' is >0!
+        #z_eos = 1. / (1. + xp.exp(eos_input)) # F.sigmoid. NOTE: usually sigmoid is 1/(1+e^-x). Here 'x' is >0!
+        z_eos = xp.exp(eos_input) / xp.sum(xp.exp(eos_input), 0, keepdims=True)
         z_s_x1 = xp.exp(s_x1_input) + 1e-10
         z_s_x2 = xp.exp(s_x2_input) + 1e-10
         z_rho = xp.tanh(rho_input)
@@ -114,7 +115,8 @@ class MixtureDensityNetworkFunction(function.Function):
 
         #loss_x = z_eos * x3 + (1. - z_eos) * (1. - x3)
         #loss_x = -xp.log(loss_x)
-        loss_x = -x3 * xp.log(z_eos) - (1. - x3) * xp.log(1. - z_eos)
+        #loss_x = -x3 * xp.log(z_eos) - (1. - x3) * xp.log(1. - z_eos)
+        loss_x = -x3 * log(z_eos)
 
         loss = loss_y + loss_x
 
