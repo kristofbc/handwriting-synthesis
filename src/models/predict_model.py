@@ -14,7 +14,6 @@ except:
     pass
 
 from train_model import Model
-from train_model import get_padded_data
 from train_model import get_max_sequence_length
 
 import click
@@ -141,6 +140,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
     stats = np.load(data_dir + "/statistics")
     train_data = np.load(data_dir + "/train/train_data")
     train_characters = np.load(data_dir + "/train/train_characters")
+    vocab = np.load(data_dir + "/vocabulary")
 
     """ Parse the input character sequences """
     # Create the vocabulary array
@@ -178,7 +178,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
 
     #n_chars = len(vocabulary)
     # @TODO: character size should be dynamic (83 is the length of the current data)
-    n_chars = 83
+    n_chars = 81#len(vocab)
     n_max_seq_length = get_max_sequence_length(train_characters)
     
     """ Import the trained model """
@@ -187,7 +187,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
 
     # @TODO: should check if peephole is requested
     #n_chars_training = len(original_vocabulary)
-    model = Model(n_chars, input_size, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number, use_adaptive_noise=False)
+    model = Model(rnn_cells_number, mix_comp_number, win_unit_number)
     
     if gpu >= 0:
         chainer.cuda.get_device(gpu).use()
@@ -203,7 +203,8 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
     """ Create the one-hot vocabulary sequence """
     #batchsize = len(text)
     #batchsize = len(train_characters)
-    cs_data = xp.zeros((batchsize, n_chars, n_max_seq_length))
+    batchsize = 1
+    cs_data = xp.zeros((batchsize, n_chars, n_max_seq_length)).astype(xp.float32)
     ls_data = xp.zeros((batchsize, 1))
     for j in xrange(batchsize):
         for k in xrange(len(train_characters[j])):
@@ -217,10 +218,6 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
     #cs_data = xp.concatenate((cs_data, pad), axis=1)
 
     with chainer.no_backprop_mode(), chainer.using_config('train', False):
-        cs = chainer.Variable(xp.asarray(cs_data).astype(xp.float32))
-        ls = chainer.Variable(xp.asarray(ls_data).astype(xp.float32))
-        n_batches = chainer.Variable(xp.asarray(batchsize+xp.zeros(1)).astype(xp.int32))
-
         for j in xrange(len(text)):
             x_data = xp.zeros((batchsize, 3)).astype(xp.float32)
             x_next_data = xp.ones((batchsize, 3)).astype(xp.float32) * (-1.0)
@@ -232,29 +229,36 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
             strokes = []
             mse = 0
             cursor = truncated_back_prop_len if len(data_index) == 0 else len(train_data[data_index[j]])-1
+            mdn_states = np.zeros((batchsize, cursor, 1 + 6*mix_comp_number + 1 + 3 + 3))
+
             for i in xrange(cursor):
                 logger.info("Iteration {}".format(i))
-                # Start the prediction at postion 0, 0
-                x_now = chainer.Variable(xp.asarray(x_data[0:batchsize, 0:3]).astype(xp.float32))
-                x_next = chainer.Variable(xp.asarray(x_next_data[0:batchsize, 0:3].astype(xp.float32)))
-                
-                # The weight are updated only in the first iteration
-                local_update_weight = True if i == 0 else False
+                tmp_mdn = np.zeros((batchsize, 1, 1 + 6*mix_comp_number + 1 + 3 + 3))
 
                 # Predict the next stroke
-                x = [x_now, x_next, cs, ls, prob_bias, n_batches]
-                loss_i, x_pred, eos_i, pi_i, mux_i, muy_i, sgx_i, sgy_i, rho_i, loss_complex_i = model(x, renew_weights=local_update_weight)
+                predict_data = xp.zeros((1, 2, 3)).astype(xp.float32)
+                predict_data[0][0] = x_data
+                predict_data[0][1] = x_next_data
+
+                loss_i = model([predict_data, cs_data])
                 loss_network += loss_i.data
+                eos_i = model.mdn.eos
+                pi_i = model.mdn.pi 
+                mux_i = model.mdn.mu_x1
+                muy_i = model.mdn.mu_x2
+                sgx_i = model.mdn.s_x1
+                sgy_i = model.mdn.s_x2
+                rho_i = model.mdn.rho
 
                 # From the distribution fetch a potential pen point
                 pi_i_cpu = chainer.cuda.to_cpu(pi_i.data)
-                x_pred_cpu = chainer.cuda.to_cpu(x_pred.data)
                 eos_i_cpu = chainer.cuda.to_cpu(eos_i.data)
                 mux_i_cpu = chainer.cuda.to_cpu(mux_i.data)
                 muy_i_cpu = chainer.cuda.to_cpu(muy_i.data)
                 sgx_i_cpu = chainer.cuda.to_cpu(sgx_i.data)
                 sgy_i_cpu = chainer.cuda.to_cpu(sgy_i.data)
                 rho_i_cpu = chainer.cuda.to_cpu(rho_i.data)
+
                 for k in xrange(pi_i_cpu.shape[0]):
                     def get_point_index(x, pi):
                         summ = 0
@@ -266,7 +270,8 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
                         raise ValueError("Unable to sample index from distribution")
 
                     #idx_pos = get_point_index(random.random(), pi_i[k])
-                    idx_pos = np.random.choice(range(len(pi_i_cpu[k])), p=pi_i_cpu[k])
+                    #idx_pos = np.random.choice(range(len(pi_i_cpu[k])), p=pi_i_cpu[k])
+                    idx_pos = pi_i_cpu[k].argmax()
 
                     # From the index, perform a simple gaussian 2d to get the next positions
                     def get_next_position_gaussian_2d(mux, muy, sgx, sgy, rho):
@@ -274,17 +279,10 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
                         covar = np.asarray([[sgx*sgx, rho*sgx*sgy], [rho*sgx*sgy, sgy*sgy]])
 
                         x = np.random.multivariate_normal(mean, covar, 1)
-                        #plt.plot(x[0][0], x[0][1], 'x')
-                        #plt.axis('equal')
-                        #plt.show()
-
                         return x[0][0], x[0][1]
 
                     x1_pred, x2_pred = get_next_position_gaussian_2d(mux_i_cpu[k][idx], muy_i_cpu[k][idx], sgx_i_cpu[k][idx], sgy_i_cpu[k][idx], rho_i_cpu[k][idx])
-                    #x1_pred = x_pred_cpu[k][0]
-                    #x2_pred = x_pred_cpu[k][1]
 
-                    #eos_pred = 1 if random.random() < eos_i[k].data else 0
                     eos_pred = 1.0 if eos_i_cpu[k] > 0.10 else 0.0
                     
                     x_data[k, 0] = x1_pred
@@ -303,57 +301,30 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
                     # @TODO: x_data[0] is harcoded
                     mse += np.sum(np.square(x_gt[0:2] - x_data_cpu[0, 0:2]))/cursor
 
-                #mse += F.sum(F.square(x_next[:, 0:2] - x_pred[:, 0:2]))/len(x_pred)
-
                 # Store the results of the stoke
                 # @TODO: x_data[0] is harcoded
                 strokes = np.asarray([x_data_cpu[0]]) if len(strokes) == 0 else np.concatenate((strokes, np.asarray([x_data_cpu[0]])))
 
-                # New positions
-                #x_now = x_pred.data.astype(xp.float32)
+                tmp_mdn[0:batchsize, 0, 0:1] = eos_i_cpu
+                tmp_mdn[0:batchsize, 0, 1:(mix_comp_number+1)] = pi_i_cpu
+                tmp_mdn[0:batchsize, 0, (mix_comp_number+1):(2*mix_comp_number+1)] = mux_i_cpu
+                tmp_mdn[0:batchsize, 0, (2*mix_comp_number+1):(3*mix_comp_number+1)] = muy_i_cpu
+                tmp_mdn[0:batchsize, 0, (3*mix_comp_number+1):(4*mix_comp_number+1)] = sgx_i_cpu
+                tmp_mdn[0:batchsize, 0, (4*mix_comp_number+1):(5*mix_comp_number+1)] = sgy_i_cpu
+                tmp_mdn[0:batchsize, 0, (5*mix_comp_number+1):(6*mix_comp_number+1)] = rho_i_cpu
+                tmp_mdn[0:batchsize, 0, (6*mix_comp_number+1):(6*mix_comp_number+2)] = chainer.cuda.to_cpu(loss_i.data)
+                tmp_mdn[0:batchsize, 0, (6*mix_comp_number+2):(6*mix_comp_number+5)] = x_data_cpu[0]
+                tmp_mdn[0:batchsize, 0, (6*mix_comp_number+5):(6*mix_comp_number+8)] = train_data[data_index[j]][i] if data_index > 0 else [0, 0, 0]
+
+                mdn_states[0:batchsize, i:(i+1), :] = tmp_mdn[0:batchsize, 0:1, 0:(1+ 6*mix_comp_number + 1 + 3 + 3)]
 
             # Compile the results
             losses_network_cpu = chainer.cuda.to_cpu(xp.copy(loss_network))
             mse_cpu = mse
+
+            # Save the results
+            np.save(path + "/{0}-mdn.npy".format(text[j].replace(" ", "-")), mdn_states)
             model.reset_state()
-
-            """ Generate the handwriting sequence """
-            # @TODO: must fetch the stats dynamically
-            # Must "un-normalize" the generated strokes
-            def denormalize(data):
-                data[:, 1] *= stats[3]
-                data[:, 0] *= stats[2]
-                data[:, 1] += stats[1]
-                data[:, 0] += stats[0]
-
-                return data
-
-            # Draw the generate handwritten text
-            plt.cla(); plt.clf()
-            plt.figure(1)
-            #strokes = xp.concatenate((strokes, xp.asarray([[0.0, 0.0, 1.0]])))
-
-            logger.info("Generating the handwriting sequence for '{}'".format(text[j]))
-            
-            # Draw the ground-truth and the ground-truth-prediction overlay if requested
-            if len(data_index) > 0:
-                plt.subplot("{0}{1}{2}".format(2, 1, 1))
-                plt.title(text[j] + " (MSE: {})".format(mse_cpu))
-                gt_stroke = denormalize(train_data[data_index[j]])
-                draw_from_strokes(gt_stroke, plt)
-                
-                plt.subplot("{0}{1}{2}".format(2, 1, 2))
-                pred_stroke = denormalize(strokes)
-                draw_from_strokes(pred_stroke, plt)
-            else:
-                plt.subplot("{0}{1}{2}".format(1, 1, 1))
-                plt.title(text[j])
-                pred_stroke = denormalize(strokes)
-                draw_from_strokes(pred_stroke, plt)
-
-            plt.show()
-            #plt.savefig(path + "/" + text[i].replace(" ", "-") + ".png")
-
 
 # ===============
 # CLI Entry point

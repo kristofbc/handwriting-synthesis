@@ -402,11 +402,11 @@ class Model(chainer.Chain):
             Perform the handwriting prediction
 
             Args:
-                inputs (float[][]): a tensor containing current position (X), next position (Xt+1), char sequence (cs)
+                inputs (float[][]): a tensor containing the positions (X), char sequence (cs)
             Returns:
                 loss (float)
         """
-        data, characters, cs_data = inputs
+        data, cs_data = inputs
         batch_size, t_max, x_dim = data.shape
 
         # Create the one-hot encoding
@@ -549,7 +549,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
         if resume_stats == 1:
             history_network_train = list(np.load(output_dir + "/" + resume_dir + "/history-network-train.npy"))
             history_network_valid = list(np.load(output_dir + "/" + resume_dir + "/history-network-valid.npy"))
-            offset_epoch = len(history_train)-1
+            offset_epoch = len(history_network_train)
 
     """ Prepare data """
     sets = []
@@ -583,7 +583,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 
         # Train the batch
         #optimizer.update(model, [train_data_batch, train_characters_batch, cs_data])
-        loss_t = model([train_data_batch, train_characters_batch, cs_data])
+        loss_t = model([train_data_batch, cs_data])
 
         # Truncated back-prop at each time-step
         model.cleargrads()
