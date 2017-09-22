@@ -61,15 +61,20 @@ class MixtureDensityNetworkFunction(function.Function):
         
         xp = cuda.get_array_module(*inputs)
 
+        def softmax(x):
+            shiftx = x - x.max()
+            exps = xp.exp(shiftx)
+            return exps / xp.sum(exps, 1, keepdims=True)
+
         # Get MDN coeff. Eq #18 to #22
         #z_eos = 1. / (1. + xp.exp(eos_input)) # F.sigmoid. NOTE: usually sigmoid is 1/(1+e^-x). Here 'x' is >0!
         z_eos = xp.exp(eos_input) / xp.sum(xp.exp(eos_input), 0, keepdims=True)
         z_s_x1 = xp.exp(s_x1_input) + 1e-10
         z_s_x2 = xp.exp(s_x2_input) + 1e-10
         z_rho = xp.tanh(rho_input)
-        #z_pi = xp.softmax(pi_input)
-        z_pi = xp.exp(pi_input)
-        z_pi = z_pi / xp.sum(z_pi, 1, keepdims=True)
+        z_pi = softmax(pi_input)
+        #z_pi = xp.exp(pi_input)
+        #z_pi = z_pi / xp.sum(z_pi, 1, keepdims=True)
         z_mu_x1 = mu_x1_input
         z_mu_x2 = mu_x2_input
 
@@ -111,12 +116,11 @@ class MixtureDensityNetworkFunction(function.Function):
         loss_y = xp.sum(loss_y, 1, keepdims=True) + 1e-10 # + 1e-10 for computational stability, != nan
         #epsilon = xp.full(loss_y.shape, 1e-10, dtype=xp.float32)
         #loss_y = xp.maximum(loss_y, epsilon) # Because at the begining loss_y is exactly 0 sometime
-        loss_y = -xp.log(loss_y) 
+        loss_y = -xp.log(loss_y + 1e-10) 
 
         #loss_x = z_eos * x3 + (1. - z_eos) * (1. - x3)
         #loss_x = -xp.log(loss_x)
-        #loss_x = -x3 * xp.log(z_eos) - (1. - x3) * xp.log(1. - z_eos)
-        loss_x = -x3 * log(z_eos)
+        loss_x = -x3 * xp.log(z_eos + 1e-10) - (1. - x3) * xp.log(1. - z_eos + 1e-10)
 
         loss = loss_y + loss_x
 
