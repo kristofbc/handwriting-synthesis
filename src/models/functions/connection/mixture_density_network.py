@@ -61,14 +61,19 @@ class MixtureDensityNetworkFunction(function.Function):
         
         xp = cuda.get_array_module(*inputs)
 
+        def softmax(x):
+            shiftx = x - x.max()
+            exps = xp.exp(shiftx)
+            return exps / xp.sum(exps, 1, keepdims=True)
+
         # Get MDN coeff. Eq #18 to #22
         z_eos = 1. / (1. + xp.exp(eos_input)) # F.sigmoid. NOTE: usually sigmoid is 1/(1+e^-x). Here 'x' is >0!
         z_s_x1 = xp.exp(s_x1_input) + 1e-10
         z_s_x2 = xp.exp(s_x2_input) + 1e-10
         z_rho = xp.tanh(rho_input)
-        #z_pi = xp.softmax(pi_input)
-        z_pi = xp.exp(pi_input)
-        z_pi = z_pi / xp.sum(z_pi, 1, keepdims=True)
+        z_pi = softmax(pi_input)
+        #z_pi = xp.exp(pi_input)
+        #z_pi = z_pi / xp.sum(z_pi, 1, keepdims=True)
         z_mu_x1 = mu_x1_input
         z_mu_x2 = mu_x2_input
 
