@@ -79,8 +79,8 @@ def pad_data(data, characters):
     for i in xrange(len(data)):
         if len(data[i]) != max_length_data:
             pad_length = max_length_data-len(data[i])
-            pad = np.full((pad_length, 3), 0)
-            pad[:,2] = 2.0
+            pad = np.full((pad_length, 5), 0)
+            pad[:, 2:5] = 2.
             data[i] = np.vstack([data[i], pad])
         tmp1.append(np.asarray(data[i]))
         tmp2.append(np.asarray(characters[i]))
@@ -97,6 +97,31 @@ def one_hot(data, characters, n_chars, n_max_seq_length):
             cs[i, k, j] = 1.0
 
     return cs
+
+def get_expanded_stroke_position(positions):
+    # Each position time step is composed of
+    # deltaX, deltaY, p1, p2, p3
+    # deltaX, deltaY is the pen position's offsets
+    # p1 = pen is touching paper
+    # p2 = pen will be lifted from the paper (don't draw next stroke)
+    # p3 = handwriting is completed
+    new_positions = []
+    for stroke in positions:
+        parts = np.zeros((len(stroke), 5), dtype=np.float32)
+        idx_mask = np.where(stroke[:, 2] == 2.)[0]
+        parts[:, 0:2] = stroke[:, 0:2]
+        parts[:, 3] = stroke[:, 2]
+        parts[:, 2] = 1 - stroke[:, 2]
+
+        if len(idx_mask) > 0:
+            parts[idx_mask, 2:5] = 2.
+            parts[idx_mask[0]-1, 4] = 1
+        else:
+            parts[-1][4] = 1
+
+        new_positions.append(parts)
+
+    return np.asarray(new_positions)
 
 # ================
 # Functions (fcts)
@@ -249,7 +274,7 @@ class MixtureDensityNetwork(chainer.Link):
         self.n_unit = n_units
         self.p_bias = prob_bias
 
-        self.eos, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = None, None, None, None, None, None, None
+        self.q, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = None, None, None, None, None, None, None
         self.gamma = None
         self.loss = None
 
@@ -257,7 +282,7 @@ class MixtureDensityNetwork(chainer.Link):
         """
             Reset the Variables
         """
-        self.eos, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = None, None, None, None, None, None, None
+        self.q, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = None, None, None, None, None, None, None
         self.gamma = None
         self.loss = None
 
@@ -289,7 +314,7 @@ class MixtureDensityNetwork(chainer.Link):
         s_x1_h -= self.p_bias
         s_x2_h -= self.p_bias
 
-        self.loss, _, _, _, _, self.eos, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = mixture_density_network(
+        self.loss, _, _, _, self.q, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = mixture_density_network(
             x, q, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h
         )
 
@@ -415,18 +440,18 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     training_suffix = "{0}".format("training")
     state_suffix = "{0}".format("state")
 
-    #save_dir = output_dir + '/' + model_suffix_dir
-    #if not os.path.exists(save_dir):
-    #    os.makedirs(save_dir)
+    save_dir = output_dir + '/' + model_suffix_dir
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
 
     """ Setup the global logger """
     logger = logging.getLogger()
     logFormatter = logging.Formatter(log_fmt)
 
     # File logger
-    #fh = logging.FileHandler("{0}/logs.txt".format(save_dir))
-    #fh.setFormatter(logFormatter)
-    #logger.addHandler(fh)
+    fh = logging.FileHandler("{0}/logs.txt".format(save_dir))
+    fh.setFormatter(logFormatter)
+    logger.addHandler(fh)
 
     # stdout logger
     #ch = logging.StreamHandler(sys.stdout)
@@ -461,6 +486,14 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     valid_characters = load_data(data_dir + "/valid/valid_characters")
     vocab = load_data(data_dir + "/vocabulary")
 
+    # Each position time step is composed of
+    # deltaX, deltaY, p1, p2, p3
+    # deltaX, deltaY is the pen position's offsets
+    # p1 = pen is touching paper
+    # p2 = pen will be lifted from the paper (don't draw next stroke)
+    # p3 = handwriting is completed
+    train_data = get_expanded_stroke_position(train_data)
+    valid_data = get_expanded_stroke_position(valid_data)
 
     n_max_seq_length = max(get_max_sequence_length(train_characters), get_max_sequence_length(valid_characters))
     n_chars = len(vocab)
@@ -579,7 +612,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                         valid_cs_data = one_hot(valid_data_batch, valid_characters, n_chars, n_max_seq_length)
 
                         # Train the batch
-                        model([valid_data_batch, valid_characters_batch, valid_cs_data])
+                        model([valid_data_batch, valid_cs_data])
                         time_iteration_end = time.time()-time_iteration_start
                         loss = cuda.to_cpu(model.loss.data)
                         history_valid.append([loss, time_iteration_end])
@@ -606,6 +639,9 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             # Check if we should save the data
             if epoch % save_interval == 0:
                 logger.info("Saving the model, optimizer and history")
+
+                if not os.path.exists(save_dir):
+                    os.makedirs(save_dir)
 
                 # Save the model and optimizer
                 chainer.serializers.save_npz(save_dir + '/model-{}'.format(epoch+1), model)
