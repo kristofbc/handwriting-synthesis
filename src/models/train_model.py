@@ -374,6 +374,7 @@ class Model(chainer.Chain):
             self.x_lstm3 = Linear(n_layers, n_units*4)
             self.lstm1_lstm2 = Linear(n_units, n_units * 4)
             self.lstm2_lstm3 = Linear(n_units, n_units * 4)
+            # Input shape (here None) is the length of the vocabulary: it's dynamic
             self.sw_lstm1 = Linear(None, n_units * 4)
             self.sw_lstm2 = Linear(None, n_units * 4)
             self.sw_lstm3 = Linear(None, n_units * 4)
