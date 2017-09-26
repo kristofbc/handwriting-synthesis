@@ -130,7 +130,7 @@ class MixtureDensityNetworkFunction(function.Function):
         loss = loss_y + loss_x
 
         # Mask guard to check if x3 == 2 (added padding)
-        idx_mask = xp.where(x3_5[:, 0] == 2)
+        idx_mask = xp.where(x3_5[:, 0] == 2)[0]
         mask = xp.ones((len(x3_5), 1), dtype=xp.float32) # Only 1D array for mask
         mask[idx_mask, 0] = 0.
         self.mask = mask
@@ -166,7 +166,8 @@ class MixtureDensityNetworkFunction(function.Function):
         d_rho_norm_x1 = self.z_rho * d_norm_x1
         d_rho_norm_x2 = self.z_rho * d_norm_x2
 
-        g_q = (xp.log(self.z_q + epsilon) - 1) * self.loss_q
+        #g_q = (xp.log(self.z_q + epsilon) - 1) * self.loss_q
+        g_q = (self.z_q - 1) / (x3_5 + 1e-10)
         g_pi = (self.z_pi - self.gamma) * self.mask
         g_mu_x1 = - self.gamma * ((C/self.z_s_x1) * (d_norm_x1 - d_rho_norm_x2)) * self.mask
         g_mu_x2 = - self.gamma * ((C/self.z_s_x2) * (d_norm_x2 - d_rho_norm_x1)) * self.mask
