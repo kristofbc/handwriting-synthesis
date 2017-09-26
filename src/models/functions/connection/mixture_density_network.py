@@ -167,7 +167,7 @@ class MixtureDensityNetworkFunction(function.Function):
         d_rho_norm_x2 = self.z_rho * d_norm_x2
 
         #g_q = (xp.log(self.z_q + epsilon) - 1) * self.loss_q
-        g_q = (self.z_q - 1) / (x3_5 + 1e-10)
+        g_q = (self.z_q - 1) * self.mask
         g_pi = (self.z_pi - self.gamma) * self.mask
         g_mu_x1 = - self.gamma * ((C/self.z_s_x1) * (d_norm_x1 - d_rho_norm_x2)) * self.mask
         g_mu_x2 = - self.gamma * ((C/self.z_s_x2) * (d_norm_x2 - d_rho_norm_x1)) * self.mask

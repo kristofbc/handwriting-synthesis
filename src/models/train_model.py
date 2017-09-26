@@ -300,19 +300,21 @@ class MixtureDensityNetwork(chainer.Link):
         xp = cuda.get_array_module(*x)
 
         # Extract the MDN's parameters
-        q, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h = F.split_axis(
+        q_h, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h = F.split_axis(
             y, [
                 3, 3+self.n_mdn_comp, 3+2*self.n_mdn_comp, 3+3*self.n_mdn_comp, 3+4*self.n_mdn_comp, 3+5*self.n_mdn_comp
             ], axis=1
         )
 
         # Add the bias to the parameter to change the shape of the prediction
-        pi_h *= (1. + self.p_bias)
-        s_x1_h -= self.p_bias
-        s_x2_h -= self.p_bias
+        p_bias = 1. if self.p_bias == 0 else self.p_bias
+        q_h /= p_bias
+        pi_h /= p_bias
+        s_x1_h *= p_bias
+        s_x2_h *= p_bias
 
         self.loss, _, _, _, self.q, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = mixture_density_network(
-            x, q, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h
+            x, q_h, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h
         )
 
         self.loss = F.sum(self.loss)
