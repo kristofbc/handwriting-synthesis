@@ -241,9 +241,9 @@ class MixtureDensityNetwork(chainer.Link):
         super(MixtureDensityNetwork, self).__init__()
 
         with self.init_scope():
-            #self.input_linear = L.Linear(1 + n_mdn_comp * 6) # end_of_stroke + 6 parameters per Gaussian
-            self.mdn_W = chainer.Parameter(chainer.initializers.Normal(0.075), (1 + n_mdn_comp * 6, n_units))
-            self.mdn_b = chainer.Parameter(chainer.initializers.Normal(0.075), (1 + n_mdn_comp * 6))
+            # 5 * n_mdn_comp = mu1, mu2, s1, s2, rho, n_mdn_comp = pi, 3 = q1, q2, q3
+            self.mdn_W = chainer.Parameter(chainer.initializers.Normal(0.075), (n_mdn_comp * 5 + n_mdn_comp + 3, n_units))
+            self.mdn_b = chainer.Parameter(chainer.initializers.Normal(0.075), (n_mdn_comp * 5 + n_mdn_comp + 3))
 
         self.n_mdn_comp = n_mdn_comp
         self.n_unit = n_units
@@ -278,8 +278,10 @@ class MixtureDensityNetwork(chainer.Link):
         #x = self.input_linear(x)
         x = F.linear(x, self.mdn_W, self.mdn_b)
 
-        eos_h, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h = F.split_axis(
-            x, np.asarray([1 + i*self.n_mdn_comp for i in xrange(5+1)]), axis=1
+        q, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h = F.split_axis(
+            x, xp.asarray([
+                3, 3+self.n_mdn_comp, 3+2*self.n_mdn_comp, 3+3*self.n_mdn_comp, 3+4*self.n_mdn_comp, 3+5*self.n_mdn_comp
+            ]), axis=1
         )
 
         # Add the bias to the parameter to change the shape of the prediction
@@ -287,59 +289,12 @@ class MixtureDensityNetwork(chainer.Link):
         s_x1_h -= self.p_bias
         s_x2_h -= self.p_bias
 
-        self.loss, _, self.eos, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = mixture_density_network(
-            x, eos_h, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h
+        self.loss, _, _, _, _, self.eos, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = mixture_density_network(
+            x, q, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h
         )
 
         self.loss = F.sum(self.loss)
         return self.loss
-
-        # Compute the parameters used in the MDN. Eq 18 to 22
-        z_eos = 1. / (1. + F.exp(eos_h))
-        z_pi = F.softmax(pi_h)
-        z_mu_x1 = mu_x2_h
-        z_mu_x2 = mu_x2_h
-        z_s_x1 = F.exp(s_x1_h)
-        z_s_x2 = F.exp(s_x2_h)
-        z_rho = F.tanh(rho_h)
-
-        self.eos = z_eos
-        self.pi = z_pi
-        self.mu_x1 = z_mu_x1
-        self.mu_x2 = z_mu_x2
-        self.s_x1 = z_s_x1
-        self.s_x2 = z_s_x2
-        self.rho = z_rho
-
-        x1 = x_next[:, 0:1]
-        x2 = x_next[:, 1:2]
-        x3 = x_next[:, 2:3]
-
-        # Compute "Z". Eq 25
-        x1_b = F.broadcast_to(x1, z_mu_x1.shape)
-        x2_b = F.broadcast_to(x2, z_mu_x2.shape)
-        z = (F.square(x1_b - z_mu_x1)/F.square(z_s_x1)) + \
-            (F.square(x2_b - z_mu_x2)/F.square(z_s_x2)) - \
-            ((2. * z_rho * (x1_b - z_mu_x1) * (x2_b - z_mu_x2))/(z_s_x1*z_s_x2))
-
-        # Compute "N". Eq 24
-        n = (1. / ((2. * np.pi * z_s_x1 * z_s_x2 * F.sqrt(1. - F.square(z_rho))) + 1e-20)) * F.exp(-z / (2. * (1. - F.square(z_rho))))
-
-        # Compute the loss. Eq 26
-        gamma = z_pi * n
-        gamma_sum = F.sum(gamma, 1, keepdims=True) + 1e-20
-        self.gamma = gamma / F.broadcast_to(gamma_sum, gamma.shape)
-        loss_left = -F.log(gamma_sum)
-
-        #z_sum = (z_eos * x3) + ((1. - z_eos) * (1. - x3)) + 1e-20
-        #loss_right = -F.log(z_sum)
-        loss_right = -x3 * F.log(z_eos) - (1. - x3) * F.log(1. - z_eos)
-        
-        # @TODO probably mask the "2" values!
-        loss = loss_left + loss_right
-        loss = F.sum(loss)
-
-        return loss
         
 
 #class LSTM
@@ -460,18 +415,18 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     training_suffix = "{0}".format("training")
     state_suffix = "{0}".format("state")
 
-    save_dir = output_dir + '/' + model_suffix_dir
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+    #save_dir = output_dir + '/' + model_suffix_dir
+    #if not os.path.exists(save_dir):
+    #    os.makedirs(save_dir)
 
     """ Setup the global logger """
     logger = logging.getLogger()
     logFormatter = logging.Formatter(log_fmt)
 
     # File logger
-    fh = logging.FileHandler("{0}/logs.txt".format(save_dir))
-    fh.setFormatter(logFormatter)
-    logger.addHandler(fh)
+    #fh = logging.FileHandler("{0}/logs.txt".format(save_dir))
+    #fh.setFormatter(logFormatter)
+    #logger.addHandler(fh)
 
     # stdout logger
     #ch = logging.StreamHandler(sys.stdout)
