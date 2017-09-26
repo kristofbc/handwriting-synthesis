@@ -296,17 +296,14 @@ class MixtureDensityNetwork(chainer.Link):
             Returns:
                 loss (float)
         """
-        x, x_next = inputs
+        x, y = inputs
         xp = cuda.get_array_module(*x)
 
         # Extract the MDN's parameters
-        #x = self.input_linear(x)
-        x = F.linear(x, self.mdn_W, self.mdn_b)
-
         q, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h = F.split_axis(
-            x, xp.asarray([
+            y, [
                 3, 3+self.n_mdn_comp, 3+2*self.n_mdn_comp, 3+3*self.n_mdn_comp, 3+4*self.n_mdn_comp, 3+5*self.n_mdn_comp
-            ]), axis=1
+            ], axis=1
         )
 
         # Add the bias to the parameter to change the shape of the prediction
@@ -322,7 +319,48 @@ class MixtureDensityNetwork(chainer.Link):
         return self.loss
         
 
-#class LSTM
+class Linear(chainer.Link):
+    """
+        Linear link with custom weight and bias initialization
+        
+        Args:
+            in_size (int): Dimension of input vector
+            out_size (tuple): Dimension of output vector
+        Returns:
+            float[][]
+    """
+    def __init__(self, in_size, out_size):
+        super(Linear, self).__init__()
+
+        self.out_size = out_size
+        self.in_size = in_size
+
+        with self.init_scope():
+            self.W = chainer.Parameter(chainer.initializers.Normal(0.075))
+            self.b = chainer.Parameter(chainer.initializers.Normal(0.075), out_size)
+
+            if in_size is not None:
+                self._initialize_params(in_size)
+
+    def _initialize_params(self, in_size):
+        self.W.initialize((self.out_size, in_size))
+        self.in_size = in_size
+
+    def __call__(self, inputs):
+        """
+            Perform the Linear operation with custom weights and bias
+
+            Args:
+                inputs (float[][]): input tensor "x" to transform
+            Returns
+                float[][]
+        """
+        x = inputs
+
+        if self.W.data is None:
+            self._initialize_params(x.size // x.shape[0])
+
+        return F.linear(x, self.W, self.b)
 
 # =============
 # Models (mdls)
@@ -338,6 +376,7 @@ class Model(chainer.Chain):
             - MDN -> output
 
         Args:
+            n_layers (int): number of hidden rnn layers
             n_units (int): number of hidden units in LSTM cells
             n_mixture_components (int): number of MDN components
             n_window_unit (int): number of parameters in the softwindow
@@ -346,7 +385,7 @@ class Model(chainer.Chain):
             loss (float)
     """
 
-    def __init__(self, n_units, n_mixture_components, n_window_unit, prob_bias = 0.):
+    def __init__(self, n_layers, n_units, n_mixture_components, n_window_unit, prob_bias = 0.):
         super(Model, self).__init__()
 
         with self.init_scope():
@@ -360,7 +399,20 @@ class Model(chainer.Chain):
 
             # Mixture Density Network
             self.mdn = MixtureDensityNetwork(n_mixture_components, n_units, prob_bias)
+
             # Linear connections for some layers
+            self.x_lstm1 = Linear(n_layers + 2, n_units*4)
+            self.x_lstm2 = Linear(n_layers + 2, n_units*4)
+            self.x_lstm3 = Linear(n_layers + 2, n_units*4)
+            self.lstm1_lstm2 = Linear(n_units, n_units * 4)
+            self.lstm2_lstm3 = Linear(n_units, n_units * 4)
+            self.sw_lstm1 = Linear(None, n_units * 4)
+            self.sw_lstm2 = Linear(None, n_units * 4)
+            self.sw_lstm3 = Linear(None, n_units * 4)
+            self.h1_mdn = Linear(n_units, n_mixture_components * 5 + n_mixture_components + 3)
+            self.h2_mdn = Linear(n_units, n_mixture_components * 5 + n_mixture_components + 3)
+            self.h3_mdn = Linear(n_units, n_mixture_components * 5 + n_mixture_components + 3)
+
 
         self.n_units = n_units
         self.n_mixture_components = n_mixture_components
@@ -369,7 +421,7 @@ class Model(chainer.Chain):
 
         self.loss = None
 
-    def reset_state(self):
+    def reset_state(self): 
         """
             Reset own Variables and Links Variables
         """
@@ -394,26 +446,40 @@ class Model(chainer.Chain):
 
         # Train all samples in batch
         loss = 0
+        sw_lstm1 = None
         for t in xrange(t_max-1):
             x_now = variable.Variable(self.xp.asarray(data[:, t, :], dtype=self.xp.float32))
             x_next = variable.Variable(self.xp.asarray(data[:, t+1, :], dtype=self.xp.float32))
 
             # LSTM1
-            x = self.lstm1(x_now)
+            x_lstm1 = self.x_lstm1(x_now)
+            if sw_lstm1 is not None:
+                x_lstm1 += sw_lstm1
+            h1 = self.lstm1(x_lstm1)
             
             # Attention Mechanism
-            sw = self.sw([x, cs])
+            sw = self.sw([h1, cs])
+            sw_lstm1 = self.sw_lstm1(sw)
 
             # LSTM2
-            x = F.concat((x, sw), axis=1)
-            x = F.concat((x, x_now), axis=1)
-            x = self.lstm2(x)
+            #x = F.concat((x, sw), axis=1)
+            #x = F.concat((x, x_now), axis=1)
+            x_lstm2 = self.x_lstm2(x_now)
+            x_lstm2 += self.lstm1_lstm2(h1)
+            x_lstm2 += self.sw_lstm2(sw)
+            h2 = self.lstm2(x_lstm2)
 
             # LSTM3
-            x = self.lstm3(x)
+            x_lstm3 = self.x_lstm3(x_now)
+            x_lstm3 += self.lstm2_lstm3(h2)
+            x_lstm3 += self.sw_lstm3(sw)
+            h3 = self.lstm3(x_lstm3)
 
             # MDN
-            loss += self.mdn([x, x_next])
+            y = self.h1_mdn(h1)
+            y += self.h2_mdn(h2)
+            y += self.h3_mdn(h3)
+            loss += self.mdn([x_next, y])
             #print(loss)
 
         loss /= (batch_size * t_max)
@@ -504,7 +570,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     """ Create the model """
     logger.info("Creating the model")
     if peephole == 0:
-        model = Model(rnn_cells_number, mix_comp_number, win_unit_number)    
+        model = Model(rnn_layers_number, rnn_cells_number, mix_comp_number, win_unit_number)    
     #else:
         #model = ModelPeephole(n_chars, INPUT_SIZE, win_unit_number, rnn_cells_number, mix_comp_number, rnn_layers_number)
 
