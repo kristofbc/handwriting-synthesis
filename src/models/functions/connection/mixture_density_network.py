@@ -5,6 +5,7 @@ from chainer.utils import type_check
 from chainer import cuda
 from chainer import function
 import numpy as np
+from chainer.functions.activation import log_softmax
 #from chainer import function_node
 
 from utils import clip_grad
@@ -47,15 +48,15 @@ class MixtureDensityNetworkFunction(function.Function):
         pass
     
     def forward(self, inputs):
-        x, eos_input, pi_input, mu_x1_input, mu_x2_input, s_x1_input, s_x2_input, rho_input = inputs
+        x, q_input, pi_input, mu_x1_input, mu_x2_input, s_x1_input, s_x2_input, rho_input = inputs
         #self.retain_inputs(range(len(inputs))) # Retain everything for backward
 
         if not type_check.same_types(*inputs):
             raise ValueError("numpy and cupy must not be used together\n"
-                             "type(x): {0}, type(eos_input): {1}, type(pi_input): {2}"
+                             "type(x): {0}, type(q_input): {1}, type(pi_input): {2}"
                              "type(mu_x1_input): {3}, type(mu_x2_input): {4}, type(s_x1_input): {5}"
                              "type(s_x2_input): {6}, type(rho_input): {7}"
-                             .format(type(x), type(eos_input), type(pi_input),
+                             .format(type(x), type(q_input), type(pi_input),
                                      type(mu_x1_input), type(mu_x2_input), type(s_x1_input),
                                      type(s_x2_input), type(rho_input)))
         
@@ -67,8 +68,7 @@ class MixtureDensityNetworkFunction(function.Function):
             return exps / xp.sum(exps, 1, keepdims=True)
 
         # Get MDN coeff. Eq #18 to #22
-        #z_eos = 1. / (1. + xp.exp(eos_input)) # F.sigmoid. NOTE: usually sigmoid is 1/(1+e^-x). Here 'x' is >0!
-        z_eos = xp.exp(eos_input) / xp.sum(xp.exp(eos_input), 0, keepdims=True)
+        z_q = log_softmax._log_softmax(q_input)
         z_s_x1 = xp.exp(s_x1_input) + 1e-10
         z_s_x2 = xp.exp(s_x2_input) + 1e-10
         z_rho = xp.tanh(rho_input)
@@ -79,7 +79,7 @@ class MixtureDensityNetworkFunction(function.Function):
         z_mu_x2 = mu_x2_input
 
         # The MDN coeff are saved, because they're reused in the backward phase
-        self.z_eos = z_eos
+        self.z_q = xp.exp(z_q)
         self.z_s_x1 = z_s_x1
         self.z_s_x2 = z_s_x2
         self.z_rho = z_rho
@@ -90,7 +90,7 @@ class MixtureDensityNetworkFunction(function.Function):
         # Compute the loss.
         x1 = x[:, 0:1]
         x2 = x[:, 1:2]
-        x3 = x[:, 2:3]
+        x3_5 = x[:, 2:5]
         
         # Z variable. Eq. 25
         norm_x1 = x1 - z_mu_x1
@@ -117,10 +117,9 @@ class MixtureDensityNetworkFunction(function.Function):
         #epsilon = xp.full(loss_y.shape, 1e-10, dtype=xp.float32)
         #loss_y = xp.maximum(loss_y, epsilon) # Because at the begining loss_y is exactly 0 sometime
         loss_y = -xp.log(loss_y + 1e-10) 
-
-        #loss_x = z_eos * x3 + (1. - z_eos) * (1. - x3)
-        #loss_x = -xp.log(loss_x)
-        loss_x = -x3 * xp.log(z_eos + 1e-10) - (1. - x3) * xp.log(1. - z_eos + 1e-10)
+        
+        # Softmax cross-entropy
+        loss_x = -x3_5 * xp.log(z_q + 1e-10)
 
         loss = loss_y + loss_x
 
@@ -131,15 +130,16 @@ class MixtureDensityNetworkFunction(function.Function):
         self.mask = mask
         loss *= mask
 
-        return loss, x, z_eos, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho,
+        return loss, loss_y, loss_x, x, z_q, z_pi, z_mu_x1, z_mu_x2, z_s_x1, z_s_x2, z_rho,
 
     def backward(self, inputs, grad_outputs):
         xp = cuda.get_array_module(*inputs)
-        #x, eos_input, pi_input, mu_x1_input, mu_x2_input, s_x1_input, s_x2_input, rho_input = self.get_retained_inputs()
-        x, eos_input, pi_input, mu_x1_input, mu_x2_input, s_x1_input, s_x2_input, rho_input = inputs
+        x, q_input, pi_input, mu_x1_input, mu_x2_input, s_x1_input, s_x2_input, rho_input = inputs
+
+        grad_loss_x = grad_outputs[2]
 
         # MDN coeff to differentiate
-        g_eos = xp.empty_like(eos_input)
+        g_q = xp.empty_like(q_input)
         g_s_x1 = xp.empty_like(s_x1_input)
         g_s_x2 = xp.empty_like(s_x2_input)
         g_rho = xp.empty_like(rho_input)
@@ -150,7 +150,7 @@ class MixtureDensityNetworkFunction(function.Function):
         # Compute the gradient
         x1 = x[:, 0:1]
         x2 = x[:, 1:2]
-        x3 = x[:, 2:3]
+        x3_5 = x[:, 2:5]
 
         #if xp == np:
             # From eq. 27 to 37
@@ -160,7 +160,7 @@ class MixtureDensityNetworkFunction(function.Function):
         d_rho_norm_x1 = self.z_rho * d_norm_x1
         d_rho_norm_x2 = self.z_rho * d_norm_x2
 
-        g_eos = (x3 - self.z_eos) * self.mask
+        g_q = (self.y - 1) * x3_5 * grad_q
         g_pi = (self.z_pi - self.gamma) * self.mask
         g_mu_x1 = - self.gamma * ((C/self.z_s_x1) * (d_norm_x1 - d_rho_norm_x2)) * self.mask
         g_mu_x2 = - self.gamma * ((C/self.z_s_x2) * (d_norm_x2 - d_rho_norm_x1)) * self.mask
@@ -187,7 +187,7 @@ class MixtureDensityNetworkFunction(function.Function):
         g_s_x2 = clip_grad(g_s_x2, th_min, th_max, xp)
         g_rho = clip_grad(g_rho, th_min, th_max, xp)
 
-        return None, g_eos, g_pi, g_mu_x1, g_mu_x2, g_s_x1, g_s_x2, g_rho,
+        return None, None, None, g_eos, g_pi, g_mu_x1, g_mu_x2, g_s_x1, g_s_x2, g_rho,
 
 
 def mixture_density_network(x, eos, pi, mu_x1, mu_x2, s_x1, s_x2, rho):
