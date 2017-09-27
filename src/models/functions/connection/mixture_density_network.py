@@ -64,9 +64,12 @@ class MixtureDensityNetworkFunction(function.Function):
         xp = cuda.get_array_module(*inputs)
 
         epsilon = 1e-10
+        def exp_no_overflow(x):
+            maxx = x.max(axis=1).reshape((x.shape[0], 1))
+            return xp.exp(x - maxx)
+
         def softmax(x):
-            shiftx = x - x.max()
-            exps = xp.exp(shiftx)
+            exps = exp_no_overflow(x)
             return exps / xp.sum(exps, 1, keepdims=True)
 
         # Get MDN coeff. Eq #18 to #22
@@ -107,7 +110,8 @@ class MixtureDensityNetworkFunction(function.Function):
         # Normal function. Eq. 24.
         inv_ro = 1. - xp.square(z_rho) + epsilon
         n_left = 2. * np.pi * z_s_x1 * z_s_x2 * xp.sqrt(inv_ro) + epsilon # + 1e-10 for computational stability
-        n_right = xp.exp(-z / (2. * inv_ro))
+
+        n_right = exp_no_overflow((-z / (2. * inv_ro)))
         n = n_right / n_left
 
         # Gamma parameter (for the backward phase). Eq. 28-29
