@@ -22,8 +22,8 @@ def clip_grad(value, th_min, th_max, xp=np):
         #vmax = xp.max(xp.absolute(value), axis=1).reshape((batch_size, 1))
         #rate = xp.where(vmax > th_max, th_max/vmax, 1.0).astype(xp.float32).reshape((batch_size, 1))
         #res = value * rate
-        vmax = xp.absolute(value) + 1e-10
-        rate = xp.where(vmax > th_max, th_max/vmax, 1.0).astype(xp.float32).reshape(value.shape)
+        vmax = xp.absolute(value)
+        rate = xp.where(vmax > th_max, th_max/(vmax + 1e-10), 1.0).astype(xp.float32).reshape(value.shape)
         res = value * rate
     else:
         # GPU clipping
@@ -41,3 +41,16 @@ def clip_grad(value, th_min, th_max, xp=np):
         #    raise ValueError("NaN detected")
         
     return res
+
+def mean_squared_error(true, pred):
+    """
+        Mean square error between the prediction and ground-truth
+        Args:
+            pred (float[][]): prediction
+            true (float[][]): ground-truth
+        Returns:
+            float|float[]
+    """
+    xp = cuda.get_array_module(*pred)
+    return xp.sum(xp.square(true - pred)) / pred.size
+

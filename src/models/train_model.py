@@ -41,6 +41,7 @@ from net.functions.soft_window import soft_window
 #from net.functions.mixture_density_outputs import mixture_density_outputs
 from functions.connection.mixture_density_network import mixture_density_network
 from links.connection.lstm import LSTM
+from utils import mean_squared_error
 
 INPUT_SIZE = 3 # (x, y, end_of_stroke)
 log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -211,8 +212,8 @@ class SoftWindow(chainer.Link):
 
         with self.init_scope():
             #self.input_linear = L.Linear(3*mixture_size)
-            self.mixture_W = chainer.Parameter(chainer.initializers.Normal(0.075), (3*mixture_size, unit_size))
-            self.mixture_b = chainer.Parameter(chainer.initializers.Normal(0.25), (3*mixture_size))
+            self.mixture_W = chainer.Parameter(chainer.initializers.LeCunNormal(0.075), (3*mixture_size, unit_size))
+            self.mixture_b = chainer.Parameter(chainer.initializers.LeCunNormal(0.25), (3*mixture_size))
 
         self.mixture_size = mixture_size
         self.unit_size = unit_size
@@ -267,8 +268,8 @@ class MixtureDensityNetwork(chainer.Link):
 
         with self.init_scope():
             # 5 * n_mdn_comp = mu1, mu2, s1, s2, rho, n_mdn_comp = pi, 3 = q1, q2, q3
-            self.mdn_W = chainer.Parameter(chainer.initializers.Normal(0.075), (n_mdn_comp * 5 + n_mdn_comp + 3, n_units))
-            self.mdn_b = chainer.Parameter(chainer.initializers.Normal(0.075), (n_mdn_comp * 5 + n_mdn_comp + 3))
+            self.mdn_W = chainer.Parameter(chainer.initializers.LeCunNormal(0.075), (n_mdn_comp * 5 + n_mdn_comp + 3, n_units))
+            self.mdn_b = chainer.Parameter(chainer.initializers.LeCunNormal(0.075), (n_mdn_comp * 5 + n_mdn_comp + 3))
 
         self.n_mdn_comp = n_mdn_comp
         self.n_unit = n_units
@@ -285,6 +286,14 @@ class MixtureDensityNetwork(chainer.Link):
         self.q, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = None, None, None, None, None, None, None
         self.gamma = None
         self.loss = None
+
+    def get_last_outputs(self):
+        """
+            Get the last MDN outputs
+            Returns:
+                [q, pi, mu_x1, mu_x2, s_x1, s_x2, rho]
+        """
+        return [self.q, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho]
 
     
     def __call__(self, inputs):
@@ -338,8 +347,8 @@ class Linear(chainer.Link):
         self.in_size = in_size
 
         with self.init_scope():
-            self.W = chainer.Parameter(chainer.initializers.Normal(0.075))
-            self.b = chainer.Parameter(chainer.initializers.Normal(0.075), out_size)
+            self.W = chainer.Parameter(chainer.initializers.LeCunNormal(0.075))
+            self.b = chainer.Parameter(chainer.initializers.LeCunNormal(0.075), out_size)
 
             if in_size is not None:
                 self._initialize_params(in_size)
@@ -420,6 +429,7 @@ class Model(chainer.Chain):
         self.n_mixture_components = n_mixture_components
         self.n_window_unit = n_window_unit
         self.p_bias = prob_bias
+        self.mdn_outputs = []
 
         self.loss = None
 
@@ -430,6 +440,7 @@ class Model(chainer.Chain):
         self.sw.reset_state()
         self.mdn.reset_state()
         self.loss = None
+        self.mdn_outputs = []
 
     def __call__(self, inputs):
         """
@@ -482,6 +493,8 @@ class Model(chainer.Chain):
             y += self.h2_mdn(h2)
             y += self.h3_mdn(h3)
             loss += self.mdn([x_next, y])
+            # Preserve MDN outputs
+            self.mdn_outputs.append(self.mdn.get_last_outputs())
             #print(loss)
 
         loss /= (batch_size * t_max)
@@ -588,7 +601,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     """ Setup the model """
     logger.info("Setuping the model")
     #optimizer = chainer.optimizers.Adam(alpha=0.001, beta1=0.90, beta2=0.999, eps=1e-08)
-    optimizer = chainer.optimizers.Adam(alpha=learning_rate)
+    #optimizer = chainer.optimizers.Adam(alpha=learning_rate)
+    optimizer = chainer.optimizers.RMSpropGraves()
     optimizer.setup(model)
 
     if grad_clip is not 0:
@@ -685,6 +699,22 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
                         loss = cuda.to_cpu(model.loss.data)
                         history_valid.append([loss, time_iteration_end])
                         logger.info("[VALID] Epoch #{0} ({1}/{2}): loss = {3}, time = {4}".format(epoch+1, len(history_valid), math.ceil(len(valid_set)/batch_size), loss, time_iteration_end))
+
+                        # MSE between the prediction and the ground truth
+                        # MSE for (deltaX, deltaY) and eos components
+                        #mdn_outputs = model.mdn_outputs
+                        #pi_o = np.vstack(mdn_outputs[:, 1])
+                        #mu_x_o = np.vstack(mdn_outputs[:, 2])
+                        #mu_y_o = np.vstack(mdn_outputs[:, 3])
+                        #eos_o = np.vstack(mdn_outputs[:, 0])
+
+                        #max_pi = [x.argmax() for x in pi_o]
+                        #mu_x = [mu_x_o[i][max_pi[i]] for i in xrange(len(mu_x_o))]
+                        #mu_y = [mu_y_o[i][max_pi[i]] for i in xrange(len(mu_y_o))]
+                        #mse_pos = mean_squared_error(valid_data_batch[:, 0:2], np.vstack([[mu_x[i], mu_y[i]] for i in xrange(len(mu_x))]))
+                        #mse_eos_p1 = mean_squared_error(valid_data[:, 2], eos_o[:, 0])
+                        #mse_eos_p2 = mean_squared_error(valid_data[:, 3], eos_o[:, 1])
+                        #mse_eos_p3 = mean_squared_error(valid_data[:, 4], eos_o[:, 2])
 
                         model.reset_state()
                         if valid_iter.is_new_epoch:
