@@ -244,7 +244,7 @@ class MixtureDensityNetwork(chainer.Link):
         self.n_unit = n_units
         self.p_bias = prob_bias
 
-        self.q, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = None, None, None, None, None, None, None
+        self.eos, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = None, None, None, None, None, None, None
         self.gamma = None
         self.loss = None
 
@@ -252,7 +252,7 @@ class MixtureDensityNetwork(chainer.Link):
         """
             Reset the Variables
         """
-        self.q, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = None, None, None, None, None, None, None
+        self.eos, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = None, None, None, None, None, None, None
         self.gamma = None
         self.loss = None
 
@@ -270,7 +270,7 @@ class MixtureDensityNetwork(chainer.Link):
         xp = cuda.get_array_module(*x)
 
         # Extract the MDN's parameters
-        q, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h = F.split_axis(
+        eos, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h = F.split_axis(
             y, [1 + i*self.n_mdn_comp for i in xrange(5+1)], axis=1
         )
 
@@ -279,13 +279,12 @@ class MixtureDensityNetwork(chainer.Link):
         s_x1_h -= self.p_bias
         s_x2_h -= self.p_bias
 
-        self.loss, _, self.q, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = mixture_density_network(
-            x, q, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h
+        self.loss, _, self.eos, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho = mixture_density_network(
+            x, eos, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h
         )
 
         self.loss = F.sum(self.loss)
-        return self.loss
-        
+        return self.loss 
 
 class Linear(chainer.Link):
     """

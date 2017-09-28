@@ -187,7 +187,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
 
     # @TODO: should check if peephole is requested
     #n_chars_training = len(original_vocabulary)
-    model = Model(rnn_cells_number, mix_comp_number, win_unit_number)
+    model = Model(rnn_layers_number, rnn_cells_number, mix_comp_number, win_unit_number)
     
     if gpu >= 0:
         chainer.cuda.get_device(gpu).use()
