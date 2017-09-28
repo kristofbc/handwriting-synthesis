@@ -479,7 +479,7 @@ class AdaptiveWeightNoise(chainer.Link):
         if self.nobias:
             return F.reshape(W, (self.out_size, self.in_size)), None, loss
         else:
-            w, b = F.split_axis(W, self.xp.asarray([self.out_size*(self.in_size-1)]), axis=0)
+            w, b = F.split_axis(W, [self.out_size*(self.in_size-1)], axis=0)
             return F.reshape(w, (self.out_size, self.in_size-1)), b, loss
 
 
@@ -511,9 +511,9 @@ class NormalBias(initializer.Initializer):
         args = {'loc': 0.0, 'scale': self.scale, 'size': self.out_size*(in_size-1)}
         if xp is not np:
             # Only CuPy supports dtype option
-            if self.dtype == numpy.float32 or self.dtype == numpy.float16:
+            if self.dtype == np.float32 or self.dtype == np.float16:
                 # float16 is not supported in cuRAND
-                args['dtype'] = numpy.float32
+                args['dtype'] = np.float32
 
         normal = xp.random.normal(**args).astype(self.dtype).reshape((1, args['size']))
         bias = xp.ones((1, self.out_size)).astype(self.dtype) * self.bias
