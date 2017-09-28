@@ -261,11 +261,6 @@ class MixtureDensityNetwork(chainer.Link):
     def __init__(self, n_mdn_comp, n_units, prob_bias = 0.):
         super(MixtureDensityNetwork, self).__init__()
 
-        with self.init_scope():
-            # 5 * n_mdn_comp = mu1, mu2, s1, s2, rho, n_mdn_comp = pi, 3 = q1, q2, q3
-            self.mdn_W = chainer.Parameter(chainer.initializers.LeCunNormal(0.075), (n_mdn_comp * 5 + n_mdn_comp + 3, n_units))
-            self.mdn_b = chainer.Parameter(chainer.initializers.LeCunNormal(0.075), (n_mdn_comp * 5 + n_mdn_comp + 3))
-
         self.n_mdn_comp = n_mdn_comp
         self.n_unit = n_units
         self.p_bias = prob_bias
@@ -574,9 +569,9 @@ class Model(chainer.Chain):
             self.h3_mdn = Linear(n_units, n_mixture_components * 5 + n_mixture_components + 3)
 
             # Noise for the linear connections
-            self.awn_x_lstm1 = AdaptiveWeightNoise(n_layers+1, n_units*4)
-            self.awn_x_lstm2 = AdaptiveWeightNoise(n_layers+1, n_units*4)
-            self.awn_x_lstm3 = AdaptiveWeightNoise(n_layers+1, n_units*4)
+            self.awn_x_lstm1 = AdaptiveWeightNoise(n_layers+3, n_units*4)
+            self.awn_x_lstm2 = AdaptiveWeightNoise(n_layers+3, n_units*4)
+            self.awn_x_lstm3 = AdaptiveWeightNoise(n_layers+3, n_units*4)
             self.awn_lstm1 = AdaptiveWeightNoise(n_units+1, n_units*4)
             self.awn_lstm2 = AdaptiveWeightNoise(n_units+1, n_units*4)
             self.awn_lstm3 = AdaptiveWeightNoise(n_units+1, n_units*4)
@@ -587,9 +582,9 @@ class Model(chainer.Chain):
             self.awn_sw_lstm1 = AdaptiveWeightNoise(None, n_units * 4)
             self.awn_sw_lstm2 = AdaptiveWeightNoise(None, n_units * 4)
             self.awn_sw_lstm3 = AdaptiveWeightNoise(None, n_units * 4)
-            self.awn_h1_mdn = AdaptiveWeightNoise(n_units+1, 1 + n_mixture_components * 6)
-            self.awn_h2_mdn = AdaptiveWeightNoise(n_units+1, 1 + n_mixture_components * 6)
-            self.awn_h3_mdn = AdaptiveWeightNoise(n_units+1, 1 + n_mixture_components * 6)
+            self.awn_h1_mdn = AdaptiveWeightNoise(n_units+1, n_mixture_components * 5 + n_mixture_components + 3)
+            self.awn_h2_mdn = AdaptiveWeightNoise(n_units+1, n_mixture_components * 5 + n_mixture_components + 3)
+            self.awn_h3_mdn = AdaptiveWeightNoise(n_units+1, n_mixture_components * 5 + n_mixture_components + 3)
 
         self.n_units = n_units
         self.n_mixture_components = n_mixture_components
