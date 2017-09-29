@@ -285,7 +285,6 @@ class MixtureDensityNetwork(chainer.Link):
         """
         return [self.q, self.pi, self.mu_x1, self.mu_x2, self.s_x1, self.s_x2, self.rho]
 
-    
     def __call__(self, inputs):
         """
             Perform the MDN prediction
@@ -316,9 +315,7 @@ class MixtureDensityNetwork(chainer.Link):
             x, q_h, pi_h, mu_x1_h, mu_x2_h, s_x1_h, s_x2_h, rho_h
         )
 
-        self.loss = F.sum(self.loss)
-        return self.loss
-        
+        return self.loss 
 
 class Linear(chainer.Link):
     """
@@ -595,7 +592,7 @@ class Model(chainer.Chain):
         self._awn_weights = {}
         self._awn_biases = {}
 
-        self.loss = None
+        self.loss = 0
 
     def reset_state(self): 
         """
@@ -603,7 +600,10 @@ class Model(chainer.Chain):
         """
         self.sw.reset_state()
         self.mdn.reset_state()
-        self.loss = None
+        self.lstm1.reset_state()
+        self.lstm2.reset_state()
+        self.lstm3.reset_state()
+        self.loss = 0
         self.mdn_outputs = []
 
     def reset_awn(self):
@@ -734,12 +734,13 @@ class Model(chainer.Chain):
             y = awn_op("h1_mdn", h1)
             y += awn_op("h2_mdn", h2)
             y += awn_op("h3_mdn", h3)
-            loss += self.mdn([x_next, y])
-            # Preserve MDN outputs
+            loss += F.sum(self.mdn([x_next, y])) / batch_size
             self.mdn_outputs.append(self.mdn.get_last_outputs())
+            #loss += self.mdn([x_next, y])
             #print(loss)
 
-        loss /= (batch_size * t_max)
+        #loss = (batch_size * t_max)
+        #self.loss = loss = F.sum(loss) / (batch_size * t_max)
         self.loss = loss
 
         return self.loss
@@ -868,7 +869,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     for i in [[train_data, train_characters], [valid_data, valid_characters]]:
         data, characters = i
         grouped = group_data(data, characters)
-        sets.append(grouped)
+        sets.append(list(grouped))
 
     train_set, valid_set = sets
 
@@ -900,11 +901,12 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
         cs_data = one_hot(train_data_batch, train_characters, n_chars, n_max_seq_length)
 
         # Train the batch
+        model.cleargrads()
         model.reset_awn()
         loss_t = model(train_data_batch, cs_data, n_batches)
 
         # Truncated back-prop at each time-step
-        model.cleargrads()
+        #model.cleargrads()
         loss_t.backward()
         loss_t.unchain_backward()
         optimizer.update()
