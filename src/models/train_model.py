@@ -734,7 +734,8 @@ class Model(chainer.Chain):
             y = awn_op("h1_mdn", h1)
             y += awn_op("h2_mdn", h2)
             y += awn_op("h3_mdn", h3)
-            loss += F.sum(self.mdn([x_next, y])) / batch_size
+            #loss += F.sum(self.mdn([x_next, y])) / batch_size
+            loss += F.average(self.mdn([x_next, y]))
             self.mdn_outputs.append(self.mdn.get_last_outputs())
             #loss += self.mdn([x_next, y])
             #print(loss)

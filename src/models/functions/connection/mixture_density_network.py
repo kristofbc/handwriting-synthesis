@@ -124,10 +124,11 @@ class MixtureDensityNetworkFunction(function.Function):
         loss_y = xp.sum(loss_y, 1, keepdims=True) + epsilon # + 1e-10 for computational stability, != nan
         #epsilon = xp.full(loss_y.shape, 1e-10, dtype=xp.float32)
         #loss_y = xp.maximum(loss_y, epsilon) # Because at the begining loss_y is exactly 0 sometime
-        loss_y = -xp.log(loss_y + epsilon) 
+        loss_y = -xp.log(loss_y + epsilon)
         
         # Softmax cross-entropy
-        loss_x = -x3_5 * xp.log(z_q + epsilon)
+        loss_x = x3_5 * xp.log(z_q + epsilon)
+        loss_x = -xp.sum(loss_x, axis=1, keepdims=True)
         self.loss_q = loss_x
         #loss_x = xp.reshape(loss_x, (-1, 1))
 
@@ -171,7 +172,8 @@ class MixtureDensityNetworkFunction(function.Function):
         d_rho_norm_x2 = self.z_rho * d_norm_x2
 
         #g_q = (xp.log(self.z_q + epsilon) - 1) * self.loss_q
-        g_q = (self.z_q - 1) * self.mask
+        #g_q = (self.z_q - 1) * self.mask
+        g_q = (self.z_q - x3_5) * self.mask
         g_pi = (self.z_pi - self.gamma) * self.mask
         g_mu_x1 = - self.gamma * ((C/self.z_s_x1) * (d_norm_x1 - d_rho_norm_x2)) * self.mask
         g_mu_x2 = - self.gamma * ((C/self.z_s_x2) * (d_norm_x2 - d_rho_norm_x1)) * self.mask
