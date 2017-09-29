@@ -187,7 +187,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
 
     # @TODO: should check if peephole is requested
     #n_chars_training = len(original_vocabulary)
-    model = Model(rnn_cells_number, mix_comp_number, win_unit_number)
+    model = Model(rnn_layers_number, rnn_cells_number, mix_comp_number, win_unit_number)
     
     if gpu >= 0:
         chainer.cuda.get_device(gpu).use()
@@ -240,9 +240,9 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
                 predict_data[0][0] = x_data
                 predict_data[0][1] = x_next_data
 
-                loss_i = model([predict_data, cs_data])
+                loss_i = model(predict_data, cs_data, len(text))
                 loss_network += loss_i.data
-                eos_i = model.mdn.eos
+                q_i = model.mdn.q
                 pi_i = model.mdn.pi 
                 mux_i = model.mdn.mu_x1
                 muy_i = model.mdn.mu_x2
@@ -251,13 +251,15 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
                 rho_i = model.mdn.rho
 
                 # From the distribution fetch a potential pen point
-                pi_i_cpu = chainer.cuda.to_cpu(pi_i.data)
+                q_i_cpu = chainer.cuda.to_cpu(q_i.data)
                 eos_i_cpu = chainer.cuda.to_cpu(eos_i.data)
                 mux_i_cpu = chainer.cuda.to_cpu(mux_i.data)
                 muy_i_cpu = chainer.cuda.to_cpu(muy_i.data)
                 sgx_i_cpu = chainer.cuda.to_cpu(sgx_i.data)
                 sgy_i_cpu = chainer.cuda.to_cpu(sgy_i.data)
                 rho_i_cpu = chainer.cuda.to_cpu(rho_i.data)
+                print(q_i_cpu)
+                exit()
 
                 for k in xrange(pi_i_cpu.shape[0]):
                     def get_point_index(x, pi):
