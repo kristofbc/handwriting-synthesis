@@ -6,6 +6,7 @@
 import numpy as np
 import chainer
 import chainer.functions as F
+from chainer import variable
 
 try:
     import cupy
@@ -230,6 +231,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
             mse = 0
             cursor = truncated_back_prop_len if len(data_index) == 0 else len(train_data[data_index[j]])-1
             mdn_states = np.zeros((batchsize, cursor, 1 + 6*mix_comp_number + 1 + 3 + 3))
+            n_batches = variable.Variable(xp.ones(1).astype(xp.float32)*len(text))
 
             for i in xrange(cursor):
                 logger.info("Iteration {}".format(i))
@@ -240,7 +242,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
                 predict_data[0][0] = x_data
                 predict_data[0][1] = x_next_data
 
-                loss_i = model([predict_data, cs_data])
+                loss_i = model(predict_data, cs_data, n_batches)
                 loss_network += loss_i.data
                 eos_i = model.mdn.eos
                 pi_i = model.mdn.pi 
