@@ -400,6 +400,26 @@ class AdaptiveWeightNoise(chainer.Link):
         self.sigma.initialize((self.out_size*in_size))
         self.in_size = in_size
 
+    def get_test_weight(self, in_size=None):
+        """
+            When testing, do not generate AWN weights and biases, use the current configuration
+            Args:
+                in_size (int): Input size of the variable to transform
+            Returns:
+                weights(float[][])
+        """
+        if self.in_size is None:
+            if in_size is None:
+                raise ValueError("in_size should not be none for test weights")
+
+            self.in_size = in_size
+
+        if self.nobias:
+            return F.reshape(self.mu, (self.out_size, self.in_size)), None
+        else:
+            w, b = F.split_axis(self.mu, [self.out_size*(self.in_size-1)], axis=0)
+            return F.reshape(w, (self.out_size, self.in_size-1)), b
+
     def __call__(self, batch_size, in_size=None):
         """
             Update the weigths
@@ -549,6 +569,7 @@ class Model(chainer.Chain):
         self.n_mixture_components = n_mixture_components
         self.n_window_unit = n_window_unit
         self.p_bias = prob_bias
+        self.mdn_components = None
         self._awn_weights = {}
         self._awn_biases = {}
 
@@ -564,6 +585,7 @@ class Model(chainer.Chain):
         self.lstm2.reset_state()
         self.lstm3.reset_state()
         self.loss = 0
+        self.mdn_components = None
 
     def reset_awn(self):
         """
@@ -635,7 +657,12 @@ class Model(chainer.Chain):
             weight_name = self.get_awn_weight_name(name)
             if weight_name not in self._awn_weights:
                 bias_name = self.get_awn_bias_name(name)
-                W, b, _ = self["awn_" + name](n_batches, (x.size // x.shape[0])+1)
+
+                if chainer.config.train:
+                    W, b, _ = self["awn_" + name](n_batches, (x.size // x.shape[0])+1)
+                else:
+                    W, b = self["awn_" + name].get_test_weight((x.size // x.shape[0])+1)
+
                 self._awn_weights[weight_name] = W
                 self._awn_biases[bias_name] = b
 
@@ -694,8 +721,19 @@ class Model(chainer.Chain):
             y += awn_op("h2_mdn", h2)
             y += awn_op("h3_mdn", h3)
             loss += F.sum(self.mdn([x_next, y])) / batch_size
-            #loss += self.mdn([x_next, y])
-            #print(loss)
+
+            # Store the mdn components 
+            if self.mdn_components is None:
+                self.mdn_components = self.xp.zeros((batch_size, t_max-1, 1 + 6 * self.n_mixture_components))
+
+            self.mdn_components[0:batch_size, t:(t+1), 0:1] = self.mdn.eos.data
+            self.mdn_components[0:batch_size, t:(t+1), 1:(self.n_mixture_components+1)] = self.mdn.pi.data
+            self.mdn_components[0:batch_size, t:(t+1), (1*self.n_mixture_components+1):(2*self.n_mixture_components+1)] = self.mdn.mu_x1.data
+            self.mdn_components[0:batch_size, t:(t+1), (2*self.n_mixture_components+1):(3*self.n_mixture_components+1)] = self.mdn.mu_x2.data
+            self.mdn_components[0:batch_size, t:(t+1), (3*self.n_mixture_components+1):(4*self.n_mixture_components+1)] = self.mdn.s_x1.data
+            self.mdn_components[0:batch_size, t:(t+1), (4*self.n_mixture_components+1):(5*self.n_mixture_components+1)] = self.mdn.s_x2.data
+            self.mdn_components[0:batch_size, t:(t+1), (5*self.n_mixture_components+1):(6*self.n_mixture_components+1)] = self.mdn.rho.data
+
 
         #loss = (batch_size * t_max)
         #self.loss = loss = F.sum(loss) / (batch_size * t_max)
@@ -703,6 +741,70 @@ class Model(chainer.Chain):
 
         return self.loss
 
+    def sample(self, data, cs_data, n_batches):
+        """
+            Sample from the trained model
+
+            Args:
+                inputs (float[][]): a tensor containing the positions (X), char sequence (cs)
+            Returns:
+                loss (float)
+        """
+        batch_size, t_max, x_dim = data.shape
+        # @TODO: Support more than 1 batch_size
+
+        # Create the strokes array
+        def gen_strokes(p_s, n_s):
+            arr = self.xp.zeros((1, 2, 3)).astype(self.xp.float32)
+            arr[0][0] = p_s
+            arr[0][1] = n_s
+            return arr
+
+        # Start the drawing at (0, 0)
+        x_data = gen_strokes(
+            self.xp.zeros((1, 3)).astype(self.xp.float32),
+            self.xp.asarray([[0, 0, 1]]).astype(self.xp.float32)
+        )
+
+        # @TODO: should dynamically stop the drawing
+        loss_network = self.xp.zeros((t_max, 1))
+        all_mdn_components = self.xp.zeros((t_max, 1 + 6 * self.n_mixture_components))
+        strokes = self.xp.zeros((t_max, 3))
+        for t in xrange(t_max):
+            # Prediction
+            loss = self(x_data, cs_data, n_batches)
+            loss_network[t] = loss.data
+
+            # Generate the next potential prediction
+            eos = self.mdn_components[0:1, 0, 0:1][0]
+            pi = self.mdn_components[0:1, 0, 1:(self.n_mixture_components+1)][0]
+            mu_x1 = self.mdn_components[0:1, 0, (1*self.n_mixture_components+1):(2*self.n_mixture_components+1)][0]
+            mu_x2 = self.mdn_components[0:1, 0, (2*self.n_mixture_components+1):(3*self.n_mixture_components+1)][0]
+            s_x1 = self.mdn_components[0:1, 0, (3*self.n_mixture_components+1):(4*self.n_mixture_components+1)][0]
+            s_x2 = self.mdn_components[0:1, 0, (4*self.n_mixture_components+1):(5*self.n_mixture_components+1)][0]
+            rho = self.mdn_components[0:1, 0, (5*self.n_mixture_components+1):(6*self.n_mixture_components+1)][0]
+
+            idx_pos = pi.argmax()
+            mean = self.xp.asarray([mu_x1[idx_pos], mu_x2[idx_pos]])
+            cov = self.xp.asarray([
+                [s_x1[idx_pos]*s_x1[idx_pos], rho[idx_pos]*s_x1[idx_pos]*s_x2[idx_pos]],
+                [rho[idx_pos]*s_x1[idx_pos]*s_x2[idx_pos], s_x2[idx_pos]*s_x2[idx_pos]]
+            ])
+            x = self.xp.random.multivariate_normal(mean, cov, 1)
+            x1_pred, x2_pred = x[0][0], x[0][1]
+            eos_pred = 1.0 if eos[0] > 0.10 else 0.0
+
+            x_data = gen_strokes(
+                self.xp.asarray([[x1_pred, x2_pred, eos_pred]]).astype(self.xp.float32), # Current
+                self.xp.asarray([[0, 0, 1]]).astype(self.xp.float32) # Next
+            )
+
+            # Store the information
+            strokes[t] = self.xp.asarray([x1_pred, x2_pred, eos_pred])
+            all_mdn_components[t:(t+1), :] = self.mdn_components[0:1]
+            self.mdn_components = None
+
+        return self.xp.sum(loss_network) / (batch_size * t_max), strokes, all_mdn_components
 
 # ===============================================
 # Main entry point of the training process (main)
