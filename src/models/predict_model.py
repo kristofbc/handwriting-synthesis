@@ -6,6 +6,7 @@
 import numpy as np
 import chainer
 import chainer.functions as F
+from chainer import variable
 
 try:
     import cupy
@@ -15,6 +16,7 @@ except:
 
 from train_model import Model
 from train_model import get_max_sequence_length
+from train_model import get_expanded_stroke_position
 
 import click
 import os
@@ -142,6 +144,15 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
     train_characters = np.load(data_dir + "/train/train_characters")
     vocab = np.load(data_dir + "/vocabulary")
 
+    # Each position time step is composed of
+    # deltaX, deltaY, p1, p2, p3
+    # deltaX, deltaY is the pen position's offsets
+    # p1 = pen is touching paper
+    # p2 = pen will be lifted from the paper (don't draw next stroke)
+    # p3 = handwriting is completed
+    train_data = get_expanded_stroke_position(train_data)
+    #valid_data = get_expanded_stroke_position(valid_data)
+
     """ Parse the input character sequences """
     # Create the vocabulary array
     logger.info("Parsing the input character sequence")
@@ -183,7 +194,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
     
     """ Import the trained model """
     logger.info("Importing the model {}".format(model_name))
-    input_size = 3 # dimensions of x (x, y, end-of-stroke)
+    input_size = 5 # dimensions of x (x, y, end-of-stroke)
 
     # @TODO: should check if peephole is requested
     #n_chars_training = len(original_vocabulary)
@@ -219,8 +230,8 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
 
     with chainer.no_backprop_mode(), chainer.using_config('train', False):
         for j in xrange(len(text)):
-            x_data = xp.zeros((batchsize, 3)).astype(xp.float32)
-            x_next_data = xp.ones((batchsize, 3)).astype(xp.float32) * (-1.0)
+            #x_data = xp.zeros((batchsize, 3)).astype(xp.float32)
+            #x_next_data = xp.ones((batchsize, 3)).astype(xp.float32) * (-1.0)
 
             prob_bias = 0.0
             loss_network = xp.zeros((batchsize, 1))
@@ -228,104 +239,22 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
             # The loop is defined by the backprop length
             strokes = []
             mse = 0
-            cursor = truncated_back_prop_len if len(data_index) == 0 else len(train_data[data_index[j]])-1
-            mdn_states = np.zeros((batchsize, cursor, 1 + 6*mix_comp_number + 1 + 3 + 3))
+            cursor = truncated_back_prop_len if len(data_index) == 0 else len(train_data[data_index[j]])
+            mdn_states = np.zeros((batchsize, cursor, mix_comp_number * 5 + mix_comp_number + 3))
+            n_batches = variable.Variable(xp.ones(1).astype(xp.float32)*len(text))
 
-            for i in xrange(cursor):
-                logger.info("Iteration {}".format(i))
-                tmp_mdn = np.zeros((batchsize, 1, 1 + 6*mix_comp_number + 1 + 3 + 3))
+            x_data = xp.zeros((1, cursor, input_size)).astype(xp.float32)
+            loss_network, strokes, mdn_components = model.sample(x_data, cs_data, n_batches)
+            states = xp.concatenate((mdn_components, xp.full((mdn_components.shape[0], 1), loss_network), strokes), axis=1)
 
-                # Predict the next stroke
-                predict_data = xp.zeros((1, 2, 3)).astype(xp.float32)
-                predict_data[0][0] = x_data
-                predict_data[0][1] = x_next_data
-
-                loss_i = model(predict_data, cs_data, len(text))
-                loss_network += loss_i.data
-                q_i = model.mdn.q
-                pi_i = model.mdn.pi 
-                mux_i = model.mdn.mu_x1
-                muy_i = model.mdn.mu_x2
-                sgx_i = model.mdn.s_x1
-                sgy_i = model.mdn.s_x2
-                rho_i = model.mdn.rho
-
-                # From the distribution fetch a potential pen point
-                q_i_cpu = chainer.cuda.to_cpu(q_i.data)
-                eos_i_cpu = chainer.cuda.to_cpu(eos_i.data)
-                mux_i_cpu = chainer.cuda.to_cpu(mux_i.data)
-                muy_i_cpu = chainer.cuda.to_cpu(muy_i.data)
-                sgx_i_cpu = chainer.cuda.to_cpu(sgx_i.data)
-                sgy_i_cpu = chainer.cuda.to_cpu(sgy_i.data)
-                rho_i_cpu = chainer.cuda.to_cpu(rho_i.data)
-                print(q_i_cpu)
-                exit()
-
-                for k in xrange(pi_i_cpu.shape[0]):
-                    def get_point_index(x, pi):
-                        summ = 0
-                        for i in xrange(len(pi)):
-                            #summ += pi[i]
-                            summ = pi[i]
-                            if summ.data >= x:
-                                return i
-                        raise ValueError("Unable to sample index from distribution")
-
-                    #idx_pos = get_point_index(random.random(), pi_i[k])
-                    #idx_pos = np.random.choice(range(len(pi_i_cpu[k])), p=pi_i_cpu[k])
-                    idx_pos = pi_i_cpu[k].argmax()
-
-                    # From the index, perform a simple gaussian 2d to get the next positions
-                    def get_next_position_gaussian_2d(mux, muy, sgx, sgy, rho):
-                        mean = np.asarray([mux, muy])
-                        covar = np.asarray([[sgx*sgx, rho*sgx*sgy], [rho*sgx*sgy, sgy*sgy]])
-
-                        x = np.random.multivariate_normal(mean, covar, 1)
-                        return x[0][0], x[0][1]
-
-                    x1_pred, x2_pred = get_next_position_gaussian_2d(mux_i_cpu[k][idx], muy_i_cpu[k][idx], sgx_i_cpu[k][idx], sgy_i_cpu[k][idx], rho_i_cpu[k][idx])
-
-                    eos_pred = 1.0 if eos_i_cpu[k] > 0.10 else 0.0
-                    
-                    x_data[k, 0] = x1_pred
-                    x_data[k, 1] = x2_pred
-                    x_data[k, 2] = eos_pred
-
-                # Transform the output
-                #x_data[:, 0:2] = x_pred.data[:, 0:2]
-                #x_data[:, 2:] = xp.where(x_pred.data[:, 2:] > 0.10, 1.0, x_pred.data[:, 2:])
-                #x_data[:, 2:] = xp.where(x_pred.data[:, 2:] > 1.0, 2.0, x_data[:, 2:])
-
-                # Compare ground truth if requested
-                x_data_cpu = chainer.cuda.to_cpu(x_data)
-                if len(data_index) > 0:
-                    x_gt = train_data[data_index[j]][i+1]
-                    # @TODO: x_data[0] is harcoded
-                    mse += np.sum(np.square(x_gt[0:2] - x_data_cpu[0, 0:2]))/cursor
-
-                # Store the results of the stoke
-                # @TODO: x_data[0] is harcoded
-                strokes = np.asarray([x_data_cpu[0]]) if len(strokes) == 0 else np.concatenate((strokes, np.asarray([x_data_cpu[0]])))
-
-                tmp_mdn[0:batchsize, 0, 0:1] = eos_i_cpu
-                tmp_mdn[0:batchsize, 0, 1:(mix_comp_number+1)] = pi_i_cpu
-                tmp_mdn[0:batchsize, 0, (mix_comp_number+1):(2*mix_comp_number+1)] = mux_i_cpu
-                tmp_mdn[0:batchsize, 0, (2*mix_comp_number+1):(3*mix_comp_number+1)] = muy_i_cpu
-                tmp_mdn[0:batchsize, 0, (3*mix_comp_number+1):(4*mix_comp_number+1)] = sgx_i_cpu
-                tmp_mdn[0:batchsize, 0, (4*mix_comp_number+1):(5*mix_comp_number+1)] = sgy_i_cpu
-                tmp_mdn[0:batchsize, 0, (5*mix_comp_number+1):(6*mix_comp_number+1)] = rho_i_cpu
-                tmp_mdn[0:batchsize, 0, (6*mix_comp_number+1):(6*mix_comp_number+2)] = chainer.cuda.to_cpu(loss_i.data)
-                tmp_mdn[0:batchsize, 0, (6*mix_comp_number+2):(6*mix_comp_number+5)] = x_data_cpu[0]
-                tmp_mdn[0:batchsize, 0, (6*mix_comp_number+5):(6*mix_comp_number+8)] = train_data[data_index[j]][i] if data_index > 0 else [0, 0, 0]
-
-                mdn_states[0:batchsize, i:(i+1), :] = tmp_mdn[0:batchsize, 0:1, 0:(1+ 6*mix_comp_number + 1 + 3 + 3)]
-
-            # Compile the results
-            losses_network_cpu = chainer.cuda.to_cpu(xp.copy(loss_network))
-            mse_cpu = mse
+            # Concatenate the ground-truth
+            if len(data_index) == 0:
+                states = xp.concatenate((states, xp.zeros_like(strokes)), axis=1)
+            else:
+                states = xp.concatenate((states, train_data[data_index[j]]), axis=1)
 
             # Save the results
-            np.save(path + "/{0}-mdn.npy".format(text[j].replace(" ", "-")), mdn_states)
+            np.save(path + "/{0}-mdn.npy".format(text[j].replace(" ", "-")), np.asarray([states]))
             model.reset_state()
 
 # ===============
