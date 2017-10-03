@@ -35,24 +35,29 @@ import matplotlib.patches as patches
 # =================
 
 
-def get_char_to_index(text):
+def get_char_to_index(text, vocabulary=None):
     """
         Get the index corresponding to the character
 
         Args:
             text (str): the text to convert
+            vocabulary (dict): available vocabulary
         Returns:
             (int[])
     """
-    vocab = {}
+    vocab = vocabulary if vocabulary is not None else {}
     cha_index = []
     for l in text:
         tmp = []
         for s in l:
             dataset = np.ndarray(len(s[0]), dtype=np.int32)
             for i, cha in enumerate(s[0]):
-                if cha not in vocab:
-                    vocab[cha] = len(vocab)
+                if cha not in vocabulary:
+                    if vocabulary is not None:
+                        raise ValueError("Character '{}' is not in vocabulary.".format(cha))
+                    else:
+                        vocab[cha] = len(vocab)
+
                 dataset[i] = vocab[cha]
             tmp.extend(dataset)
         cha_index.append(np.asarray(tmp))
@@ -129,7 +134,7 @@ def visualize_dataset(data_index, data_dir, train_set=True):
 # Main entry point of the training process (main)
 # ===============================================
 
-def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peephole, grad_clip, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed):
+def main(model_dir, model_name, text, models_dir, data_dir, prime_index, batchsize, gpu, peephole, grad_clip, truncated_back_prop_len, truncated_data_samples, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed):
     """ Generate a handwriting sequence of ASCII characters """
     logger = logging.getLogger(__name__)
     path = models_dir + '/' + model_dir
@@ -142,7 +147,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
     stats = np.load(data_dir + "/statistics")
     train_data = np.load(data_dir + "/train/train_data")
     train_characters = np.load(data_dir + "/train/train_characters")
-    vocab = np.load(data_dir + "/vocabulary")
+    vocabulary = np.load(data_dir + "/vocabulary")
 
     # Each position time step is composed of
     # deltaX, deltaY, p1, p2, p3
@@ -190,7 +195,6 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
     #n_chars = len(vocabulary)
     # @TODO: character size should be dynamic (83 is the length of the current data)
     n_chars = 81#len(vocab)
-    n_max_seq_length = get_max_sequence_length(train_characters)
     
     """ Import the trained model """
     logger.info("Importing the model {}".format(model_name))
@@ -211,15 +215,52 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
     logger.info("Model imported successfully")
     chainer.serializers.load_npz(path + "/" + model_name, model)
 
+    """ Priming """
+    # Priming consist of using the original author's sentence, then appending the new sentence to it
+    if prime_index == -2:
+        # display available authors styles
+        logger.info("Available styles between: {0} and {1}".format(0, len(train_data)-1))
+        logger.info('To visualize a style: TEXT="dataset:{styleid}:train')
+        exit()
+
+    if prime_index != -1:
+        if prime_index > len(train_data):
+            raise ValueError("Prime index is not in train_data")
+
+        text_train_character, _ = get_char_to_index(text, vocabulary)
+        batchsize = len(text_train_character)
+        n_max_seq_length = get_max_sequence_length(text_train_character)
+
+        t_max_prime, x_dim_prime = train_data[prime_index].shape
+        t_data_prime = np.where(train_data[prime_index][:, 2] == 2)[0].min()
+
+        prime_data_original = train_data[prime_index][0:t_data_prime, :]
+        prime_data_original = np.expand_dims(prime_data_original, axis=0)
+        prime_data = prime_data_original.copy()
+        for i in xrange(batchsize-1):
+            prime_data = np.r_[prime_data, prime_data_original]
+
+        prime_train_characters_data = train_characters[prime_index]
+        prime_len = len(prime_train_characters_data)
+        prime_train_characters = []
+        for i in xrange(batchsize):
+            prime_train_characters.append(np.r_[prime_train_characters_data, text_train_character[i]])
+
+    else:
+        batchsize = 1
+        n_max_seq_length = get_max_sequence_length(train_characters)
+        t_data_prime = 0
+        prime_len = 0
+        prime_train_characters = train_characters
+
     """ Create the one-hot vocabulary sequence """
     #batchsize = len(text)
     #batchsize = len(train_characters)
-    batchsize = 1
-    cs_data = xp.zeros((batchsize, n_chars, n_max_seq_length)).astype(xp.float32)
+    cs_data = xp.zeros((batchsize, n_chars, n_max_seq_length + prime_len)).astype(xp.float32)
     ls_data = xp.zeros((batchsize, 1))
     for j in xrange(batchsize):
-        for k in xrange(len(train_characters[j])):
-            length = train_characters[j][k]
+        for k in xrange(len(prime_train_characters[j])):
+            length = prime_train_characters[j][k]
             cs_data[j, length, k] = 1.0
         ls_data[j, 0] = k
 
@@ -240,18 +281,29 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
             strokes = []
             mse = 0
             cursor = truncated_back_prop_len if len(data_index) == 0 else len(train_data[data_index[j]])
+            cursor += t_data_prime
             mdn_states = np.zeros((batchsize, cursor, mix_comp_number * 5 + mix_comp_number + 3))
-            n_batches = variable.Variable(xp.ones(1).astype(xp.float32)*len(text))
+            n_batches = variable.Variable(xp.ones(1).astype(xp.float32)*len(train_data))
 
-            x_data = xp.zeros((1, cursor, input_size)).astype(xp.float32)
-            loss_network, strokes, mdn_components = model.sample(x_data, cs_data, n_batches)
+            if prime_len > 0:
+                x_data = prime_data
+                x_data = xp.concatenate((x_data, xp.zeros((1, cursor-t_data_prime, input_size)).astype(xp.float32)), axis=1)
+                #x_data = xp.zeros((1, cursor, input_size)).astype(xp.float32)
+            else:
+                x_data = xp.zeros((1, cursor, input_size)).astype(xp.float32)
+
+            loss_network, strokes, mdn_components = model.sample(x_data, cs_data, n_batches, t_data_prime)
             states = xp.concatenate((mdn_components, xp.full((mdn_components.shape[0], 1), loss_network), strokes), axis=1)
 
             # Concatenate the ground-truth
             if len(data_index) == 0:
                 states = xp.concatenate((states, xp.zeros_like(strokes)), axis=1)
             else:
-                states = xp.concatenate((states, train_data[data_index[j]]), axis=1)
+                if t_data_prime > 0:
+                    fill_train = xp.concatenate((xp.zeros((t_data_prime-1, input_size)), train_data[data_index[j]]), axis=0)
+                else:
+                    fill_train = train_data[data_index[j]]
+                states = xp.concatenate((states, fill_train), axis=1)
 
             # Save the results
             np.save(path + "/{0}-mdn.npy".format(text[j].replace(" ", "-")), np.asarray([states]))
@@ -267,6 +319,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, batchsize, gpu, peep
 @click.argument('text', type=click.STRING)
 @click.option('--models_dir', type=click.Path(exists=True), default='models', help='Directory containing the models.')
 @click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWriting', help='Directory containing data.')
+@click.option('--prime_index', type=click.INT, default=-1, help='Priming index.')
 @click.option('--batchsize', type=click.INT, default=1, help='Control the number of MDN outputs.')
 @click.option('--gpu', type=click.INT, default=-1, help='ID of the gpu to use')
 @click.option('--peephole', type=click.INT, default=0, help='LSTM with Peephole.')
