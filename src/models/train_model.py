@@ -10,6 +10,7 @@ import math
 import inspect
 import sys
 import logging
+import random
 from logging.handlers import RotatingFileHandler
 from logging import handlers
 
@@ -741,7 +742,7 @@ class Model(chainer.Chain):
 
         return self.loss
 
-    def sample(self, data, cs_data, n_batches):
+    def sample(self, data, cs_data, n_batches, t_prime_len=0):
         """
             Sample from the trained model
 
@@ -760,51 +761,71 @@ class Model(chainer.Chain):
             arr[0][1] = n_s
             return arr
 
-        # Start the drawing at (0, 0)
-        x_data = gen_strokes(
-            self.xp.zeros((1, 3)).astype(self.xp.float32),
-            self.xp.asarray([[0, 0, 1]]).astype(self.xp.float32)
-        )
+        # Get best position from pdf
+        def get_pdf_idx(x, pdf):
+            acc = 0
+            for i in xrange(0, pdf.size):
+                acc += pdf[i]
+                if acc >= x:
+                    return i
+            
+            raise ValueError("Unable to sample from the pdf")
+
+        # Start the drawing at (0, 0) or the priming data
+        if t_prime_len != 0:
+            x_data = gen_strokes(data[0][0], data[0][1])
+        else:
+            x_data = gen_strokes(
+                self.xp.zeros((1, INPUT_SIZE)).astype(self.xp.float32),
+                self.xp.asarray([[0, 0, 1]]).astype(self.xp.float32)
+            )
 
         # @TODO: should dynamically stop the drawing
         loss_network = self.xp.zeros((t_max, 1))
         all_mdn_components = self.xp.zeros((t_max, 1 + 6 * self.n_mixture_components))
-        strokes = self.xp.zeros((t_max, 3))
-        for t in xrange(t_max):
+        strokes = self.xp.zeros((t_max, INPUT_SIZE))
+        for t in xrange(t_max-1):
             # Prediction
             loss = self(x_data, cs_data, n_batches)
             loss_network[t] = loss.data
 
-            # Generate the next potential prediction
-            eos = self.mdn_components[0:1, 0, 0:1][0]
-            pi = self.mdn_components[0:1, 0, 1:(self.n_mixture_components+1)][0]
-            mu_x1 = self.mdn_components[0:1, 0, (1*self.n_mixture_components+1):(2*self.n_mixture_components+1)][0]
-            mu_x2 = self.mdn_components[0:1, 0, (2*self.n_mixture_components+1):(3*self.n_mixture_components+1)][0]
-            s_x1 = self.mdn_components[0:1, 0, (3*self.n_mixture_components+1):(4*self.n_mixture_components+1)][0]
-            s_x2 = self.mdn_components[0:1, 0, (4*self.n_mixture_components+1):(5*self.n_mixture_components+1)][0]
-            rho = self.mdn_components[0:1, 0, (5*self.n_mixture_components+1):(6*self.n_mixture_components+1)][0]
+            if t < t_prime_len-2:
+                print("Prime: {0}/{1}".format(t, t_prime_len-2))
+                stroke = x_data[0][1] # "Current Next"
+                x_data = gen_strokes(data[0][t+1], data[0][t+2])
+            else:
+                # Generate the next potential prediction
+                eos = self.mdn_components[0:1, 0, 0:1][0]
+                pi = self.mdn_components[0:1, 0, 1:(self.n_mixture_components+1)][0]
+                mu_x1 = self.mdn_components[0:1, 0, (1*self.n_mixture_components+1):(2*self.n_mixture_components+1)][0]
+                mu_x2 = self.mdn_components[0:1, 0, (2*self.n_mixture_components+1):(3*self.n_mixture_components+1)][0]
+                s_x1 = self.mdn_components[0:1, 0, (3*self.n_mixture_components+1):(4*self.n_mixture_components+1)][0]
+                s_x2 = self.mdn_components[0:1, 0, (4*self.n_mixture_components+1):(5*self.n_mixture_components+1)][0]
+                rho = self.mdn_components[0:1, 0, (5*self.n_mixture_components+1):(6*self.n_mixture_components+1)][0]
 
-            idx_pos = pi.argmax()
-            mean = self.xp.asarray([mu_x1[idx_pos], mu_x2[idx_pos]])
-            cov = self.xp.asarray([
-                [s_x1[idx_pos]*s_x1[idx_pos], rho[idx_pos]*s_x1[idx_pos]*s_x2[idx_pos]],
-                [rho[idx_pos]*s_x1[idx_pos]*s_x2[idx_pos], s_x2[idx_pos]*s_x2[idx_pos]]
-            ])
-            x = self.xp.random.multivariate_normal(mean, cov, 1)
-            x1_pred, x2_pred = x[0][0], x[0][1]
-            eos_pred = 1.0 if eos[0] > 0.10 else 0.0
+                #idx_pos = pi.argmax()
+                idx_pos = get_pdf_idx(random.random(), pi)
+                mean = self.xp.asarray([mu_x1[idx_pos], mu_x2[idx_pos]])
+                cov = self.xp.asarray([
+                    [s_x1[idx_pos]*s_x1[idx_pos], rho[idx_pos]*s_x1[idx_pos]*s_x2[idx_pos]],
+                    [rho[idx_pos]*s_x1[idx_pos]*s_x2[idx_pos], s_x2[idx_pos]*s_x2[idx_pos]]
+                ])
+                x = self.xp.random.multivariate_normal(mean, cov, 1)
+                x1_pred, x2_pred = x[0][0], x[0][1]
+                eos_pred = 1.0 if eos[0] > 0.10 else 0.0
 
-            x_data = gen_strokes(
-                self.xp.asarray([[x1_pred, x2_pred, eos_pred]]).astype(self.xp.float32), # Current
-                self.xp.asarray([[0, 0, 1]]).astype(self.xp.float32) # Next
-            )
+                stroke = self.xp.asarray([[x1_pred, x2_pred, eos_pred]]).astype(self.xp.float32)
+                x_data = gen_strokes(
+                    stroke, # Current
+                    self.xp.asarray([[0, 0, 0]]).astype(self.xp.float32) # Next
+                )
 
             # Store the information
-            strokes[t] = self.xp.asarray([x1_pred, x2_pred, eos_pred])
+            strokes[t] = stroke
             all_mdn_components[t:(t+1), :] = self.mdn_components[0:1]
             self.mdn_components = None
 
-        return self.xp.sum(loss_network) / (batch_size * t_max), strokes, all_mdn_components
+        return self.xp.sum(loss_network) / (batch_size * t_max-1), strokes, all_mdn_components
 
 # ===============================================
 # Main entry point of the training process (main)
