@@ -1251,7 +1251,7 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
 @click.option('--adaptive_noise', type=click.INT, default=1, help='Use Adaptive Weight Noise in the training process.')
 @click.option('--update_weight', type=click.INT, default=1, help='Update weights in the training process.')
 @click.option('--use_weight_noise', type=click.INT, default=1, help='Use weight noise in the training process.')
-@click.option('--save_interval', type=click.INT, default=1, help='How often the model should be saved.')
+@click.option('--save_interval', type=click.INT, default=10, help='How often the model should be saved.')
 @click.option('--validation_interval', type=click.INT, default=1, help='How often the model should be validated.')
 @click.option('--truncated_back_prop_len', type=click.INT, default=50, help='Number of backpropagation before stopping.')
 @click.option('--truncated_data_samples', type=click.INT, default=500, help='Number of samples to use inside a data.')
