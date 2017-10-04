@@ -372,6 +372,106 @@ class LinearLSTM(chainer.Chain):
         self.c, self.h = F.lstm(self.c, x)
         return self.h
 
+class LayerNormalization(chainer.Link):
+    """
+        Implementation of LayerNormalization from Ba, J. L., Kiros, J. R., & Hinton, G. E. (2016). Layer Normalization.
+        Args:
+            out_size (int): hidden unit size
+            bias_init (float): optional bias parameter
+            gain_init (float): optional gain parameter
+            epsilon (float): computation stability parameters
+    """
+    def __init__(self, out_size, bias_init = 0., gain_init = 1., epsilon = 1e-5):
+        super(LayerNormalization, self).__init__()
+        self.out_size = out_size
+        self.bias = bias_init
+        self.gain = gain_init
+        self.epsilon = epsilon
+
+    def __call__(self, x):
+        """
+            Apply the LayerNormalization on in the input "x"
+            Args:
+                x (float[][]): input tensor to re-center and re-scale (layer normalize)
+            Returns:
+                float[][]
+        """
+        # Layer Normalization parameters
+        mu = F.average(x, axis=1, keepdims=True)
+        mu = F.broadcast_to(mu, x.shape)
+        sigma = F.sqrt(F.average(F.square(x - mu), axis=1, keepdims=True) + self.epsilon)
+        sigma = F.broadcast_to(sigma, x.shape)
+
+        # Transformation
+        outputs = (x - mu) / sigma
+        # Affine transformation
+        outputs = (outputs * self.gain) + self.bias
+        #outputs = F.scale(outputs, self.gain)
+        #outputs = F.bias(outputs, self.bias)
+        
+        return outputs
+
+class LinearLayerNormalizationLSTM(chainer.Chain):
+    """
+        Alex Graves' LSTM implementation with Linear activation and LayerNormalization
+        Args:
+            n_units (int): Number of units inside this LSTM
+            forget_bias_init (float): bias added to the forget gate before sigmoid activation
+            norm_bias_init (float): optional bias parameter
+            norm_gain_init (float): optional gain parameter
+    """
+    def __init__(self, n_units, forget_bias_init = 0., norm_bias_init = 0., norm_gain_init = 1.):
+        super(LinearLayerNormalizationLSTM, self).__init__()
+
+        self.n_units = n_units
+        self.forget_bias = forget_bias_init
+        self.h = None
+        self.c = None
+
+        with self.init_scope():
+            self.h_x = Linear(None, n_units)
+            self.norm_c = LayerNormalization(self.n_units, norm_bias_init, norm_gain_init)
+
+    def reset_state(self):
+        """
+            Reset the internal state of the LSTM
+        """
+        self.h = None
+        self.c = None
+
+    def __call__(self, inputs, W, b):
+        """
+            Perform the LSTM op
+            Args:
+                inputs (float[][]): input tensor containing "x" to transform
+        """
+        x = inputs
+        if self.h is not None:
+            x += self.h_x(self.h, W, b)
+
+        if self.c is None:
+            self.c = variable.Variable(self.xp.zeros((len(inputs), self.n_units), dtype=self.xp.float32))
+
+        # Compute the LSTM using Chainer's function to be able to use LayerNormalization
+        def extract_gates(x):
+            r = F.reshape(x, (x.shape[0], x.shape[1] // 4, 4) + x.shape[2:])
+            return F.split_axis(r, 4, axis=2)
+
+        a, i, f, o = extract_gates(x)
+        # Remove unused dimension and apply transformation
+        a = F.tanh(F.squeeze(a, axis=2))
+        i = F.sigmoid(F.squeeze(i, axis=2))
+        f = F.sigmoid(F.squeeze(f, axis=2) + self.forget_bias)
+        o = F.sigmoid(F.squeeze(o, axis=2))
+
+        # Transform
+        c = a * i + f * self.c
+        # Apply LayerNormalization
+        h = o * F.tanh(self.norm_c(c))
+
+        self.c, self.h = c, h
+        return self.h
+
 class AdaptiveWeightNoise(chainer.Link):
     """
         Alex Grave's Adaptive Weight Noise
@@ -391,7 +491,7 @@ class AdaptiveWeightNoise(chainer.Link):
             else:
                 self.mu = chainer.Parameter(NormalBias(self.out_size, self.normal_scale, self.initial_bias))
 
-            self.sigma = chainer.Parameter(initializers._get_initializer(self.xp.log(1e-8)))
+            self.sigma = chainer.Parameter(initializers._get_initializer(self.xp.log(1e-10)))
 
             if in_size is not None:
                 self._initialize_params(in_size)
@@ -523,9 +623,9 @@ class Model(chainer.Chain):
 
         with self.init_scope():
             # LSTMs layers
-            self.lstm1 = LinearLSTM(n_units)
-            self.lstm2 = LinearLSTM(n_units)
-            self.lstm3 = LinearLSTM(n_units)
+            self.lstm1 = LinearLayerNormalizationLSTM(n_units, forget_bias_init=1.)
+            self.lstm2 = LinearLayerNormalizationLSTM(n_units, forget_bias_init=1.)
+            self.lstm3 = LinearLayerNormalizationLSTM(n_units, forget_bias_init=1.)
             
             # Attention mechanism
             self.sw = SoftWindow(n_window_unit, n_units)
