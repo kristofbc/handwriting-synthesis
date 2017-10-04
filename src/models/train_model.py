@@ -1036,9 +1036,6 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
     train_data = get_expanded_stroke_position(train_data)
     valid_data = get_expanded_stroke_position(valid_data)
 
-    np.save("three_to_five.npy", train_data)
-    exit()
-
     n_max_seq_length = max(get_max_sequence_length(train_characters), get_max_sequence_length(valid_characters))
     n_chars = len(vocab)
     history_network_train = []
