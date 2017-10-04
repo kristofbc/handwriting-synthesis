@@ -18,6 +18,7 @@ def clip_grad(value, th_min, th_max, xp=np):
     #value = xp.where(xp.isnan(value), 1e-10, value)
     #value = xp.clip(value, th_min, th_max)
     res = xp.zeros_like(value)
+    return value
     if xp == np:
         #vmax = xp.max(xp.absolute(value), axis=1).reshape((batch_size, 1))
         #rate = xp.where(vmax > th_max, th_max/vmax, 1.0).astype(xp.float32).reshape((batch_size, 1))
@@ -53,4 +54,3 @@ def mean_squared_error(true, pred):
     """
     xp = cuda.get_array_module(*pred)
     return xp.sum(xp.square(true - pred)) / pred.size
-
