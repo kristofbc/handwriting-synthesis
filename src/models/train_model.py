@@ -604,6 +604,7 @@ class Model(chainer.Chain):
         self._awn_biases = {}
 
         self.loss = 0
+        self.loss_complex = None
 
     def reset_state(self): 
         """
@@ -615,6 +616,7 @@ class Model(chainer.Chain):
         self.lstm2.reset_state()
         self.lstm3.reset_state()
         self.loss = 0
+        self.loss_complex = None
         self.mdn_components = None
 
     def reset_awn(self):
@@ -688,10 +690,15 @@ class Model(chainer.Chain):
             if weight_name not in self._awn_weights:
                 bias_name = self.get_awn_bias_name(name)
 
+                loss_complex = None
                 if chainer.config.train:
-                    W, b, _ = self["awn_" + name](n_batches, (x.size // x.shape[0])+1)
+                    W, b, loss_complex = self["awn_" + name](n_batches, (x.size // x.shape[0])+1)
                 else:
                     W, b = self["awn_" + name].get_test_weight((x.size // x.shape[0])+1)
+
+                if loss_complex is not None:
+                    loss_complex = F.reshape(loss_complex, (1,1))
+                    self.loss_complex = loss_complex if self.loss_complex is None else F.concat((self.loss_complex, loss_complex))
 
                 self._awn_weights[weight_name] = W
                 self._awn_biases[bias_name] = b
@@ -1027,7 +1034,8 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
         time_iteration_end = time.time()-time_iteration_start
         #loss = cuda.to_cpu(model.loss.data)
         loss = cuda.to_cpu(loss_t.data)
-        history_train.append([loss, time_iteration_end])
+        loss_complex = cuda.to_cpu(model.loss_complex.data)
+        history_train.append([loss, time_iteration_end] + list(loss_complex.flatten()))
         model.reset_state()
         logger.info("[TRAIN] Epoch #{0} ({1}/{2}): loss = {3}, time = {4}".format(epoch+1, len(history_train), epoch_batch, loss, time_iteration_end))
 
@@ -1038,11 +1046,18 @@ def main(data_dir, output_dir, batch_size, peephole, epochs, grad_clip, resume_d
             train_std = history_train[:, 0].std()
             train_min = history_train[:, 0].min()
             train_max = history_train[:, 0].max()
-            train_med = np.median(history_train)
+            train_med = np.median(history_train[:, 0])
             train_time_sum = history_train[:, 1].sum()
-            history_network_train.append([train_mean, train_std, train_min, train_max, train_med, train_time_sum])
-            logger.info("[TRAIN] Epoch #{0} (COMPLETED IN {1}): mean = {2}, std = {3}, min = {4}, max = {5}, med = {6}"
-                        .format(epoch+1, train_time_sum, train_mean, train_std, train_min, train_max, train_med))
+            train_complex_mean = history_train[:, 2:].mean()
+            train_complex_std = history_train[:, 2:].std()
+            train_complex_max = history_train[:, 2:].max()
+            train_complex_min = history_train[:, 2:].min()
+            train_complex_med = np.median(history_train[:, 2:])
+            history_network_train.append([
+                train_mean, train_std, train_min, train_max, train_med, train_time_sum,
+                train_complex_mean, train_complex_std, train_complex_min, train_complex_max, train_complex_med
+            ])
+            logger.info("[TRAIN] Epoch #{0} (COMPLETED IN {1}): mean = {2}, std = {3}, min = {4}, max = {5}, med = {6}, complex(mean) = {7}, complex(std) = {8}, complex(min) = {9}, complex(max) = {10}, complex(med) = {11}".format(epoch+1, train_time_sum, train_mean, train_std, train_min, train_max, train_med, train_complex_mean, train_complex_std, train_complex_min, train_complex_max, train_complex_med))
  
             # Check if we should validate the data
             if epoch % validation_interval == 0:
