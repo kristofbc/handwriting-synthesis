@@ -300,7 +300,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, prime_index, batchsi
                 states = xp.concatenate((states, xp.zeros_like(strokes)), axis=1)
             else:
                 if t_data_prime > 0:
-                    fill_train = xp.concatenate((xp.zeros((t_data_prime-1, input_size)), train_data[data_index[j]]), axis=0)
+                    fill_train = xp.concatenate((train_data[prime_index][0:t_data_prime-1, :], train_data[data_index[j]]), axis=0)
                 else:
                     fill_train = train_data[data_index[j]]
                 states = xp.concatenate((states, fill_train), axis=1)
