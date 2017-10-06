@@ -95,9 +95,12 @@ class Model(chainer.Chain):
 
         with self.init_scope():
             # LSTMs layers
-            self.lstm1 = LinearLSTM(n_units)
-            self.lstm2 = LinearLSTM(n_units)
-            self.lstm3 = LinearLSTM(n_units)
+            #self.lstm1 = LinearLSTM(n_units)
+            #self.lstm2 = LinearLSTM(n_units)
+            #self.lstm3 = LinearLSTM(n_units)
+            self.lstm1 = LinearLayerNormalizationLSTM(n_units, forget_bias_init = 1., norm_bias_init = 1., norm_gain_init = 0.)
+            self.lstm2 = LinearLayerNormalizationLSTM(n_units, forget_bias_init = 1., norm_bias_init = 1., norm_gain_init = 0.)
+            self.lstm3 = LinearLayerNormalizationLSTM(n_units, forget_bias_init = 1., norm_bias_init = 1., norm_gain_init = 0.)
             
             # Attention mechanism
             self.sw = SoftWindow(n_window_unit, n_units)
@@ -106,9 +109,9 @@ class Model(chainer.Chain):
             self.mdn = MixtureDensityNetwork(n_mixture_components, n_units, prob_bias)
 
             # Linear connections for some layers
-            self.x_lstm1 = Linear(n_layers, n_units*4)
-            self.x_lstm2 = Linear(n_layers, n_units*4)
-            self.x_lstm3 = Linear(n_layers, n_units*4)
+            self.x_lstm1 = Linear(n_layers, n_units*4, no_bias=True)
+            self.x_lstm2 = Linear(n_layers, n_units*4, no_bias=True)
+            self.x_lstm3 = Linear(n_layers, n_units*4, no_bias=True)
             self.lstm1_lstm2 = Linear(n_units, n_units * 4)
             self.lstm2_lstm3 = Linear(n_units, n_units * 4)
             self.lstm1_sw = Linear(n_units, n_window_unit * 3)
@@ -121,9 +124,9 @@ class Model(chainer.Chain):
             self.h3_mdn = Linear(n_units, 1 + n_mixture_components * 6)
 
             # Noise for the linear connections
-            self.awn_x_lstm1 = AdaptiveWeightNoise(n_layers+1, n_units*4)
-            self.awn_x_lstm2 = AdaptiveWeightNoise(n_layers+1, n_units*4)
-            self.awn_x_lstm3 = AdaptiveWeightNoise(n_layers+1, n_units*4)
+            self.awn_x_lstm1 = AdaptiveWeightNoise(n_layers, n_units*4, no_bias=True)
+            self.awn_x_lstm2 = AdaptiveWeightNoise(n_layers, n_units*4, no_bias=True)
+            self.awn_x_lstm3 = AdaptiveWeightNoise(n_layers, n_units*4, no_bias=True)
             self.awn_lstm1 = AdaptiveWeightNoise(n_units+1, n_units*4)
             self.awn_lstm2 = AdaptiveWeightNoise(n_units+1, n_units*4)
             self.awn_lstm3 = AdaptiveWeightNoise(n_units+1, n_units*4)

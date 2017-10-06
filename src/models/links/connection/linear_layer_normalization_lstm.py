@@ -1,6 +1,6 @@
 import chainer
 import chainer.functions as F
-from chainer import Variable
+from chainer import variable
 
 from links.connection.linear import Linear
 from links.normalization.layer_normalization import LayerNormalization
@@ -23,8 +23,10 @@ class LinearLayerNormalizationLSTM(chainer.Chain):
         self.c = None
 
         with self.init_scope():
-            self.h_x = Linear(None, n_units)
+            self.h_x = Linear(None, n_units, no_bias=True)
             self.norm_c = LayerNormalization(None, norm_bias_init, norm_gain_init)
+            self.norm_x = LayerNormalization(None, norm_bias_init, norm_gain_init)
+            self.norm_h = LayerNormalization(None, norm_bias_init, norm_gain_init)
 
     def reset_state(self):
         """
@@ -40,8 +42,9 @@ class LinearLayerNormalizationLSTM(chainer.Chain):
                 inputs (float[][]): input tensor containing "x" to transform
         """
         x = inputs
+        x = self.norm_x(x)
         if self.h is not None:
-            x += self.h_x(self.h, W, b)
+            x += F.bias(self.norm_h(self.h_x(self.h, W)), b)
 
         if self.c is None:
             self.c = variable.Variable(self.xp.zeros((len(inputs), self.n_units), dtype=self.xp.float32))

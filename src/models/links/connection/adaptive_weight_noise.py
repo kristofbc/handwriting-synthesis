@@ -10,17 +10,17 @@ class AdaptiveWeightNoise(chainer.Link):
         Alex Grave's Adaptive Weight Noise
         From: Practical Variational Inference for Neural Networks.
     """
-    def __init__(self, in_size, out_size, normal_scale=0.1, nobias=False, initial_bias=0):
+    def __init__(self, in_size, out_size, normal_scale=0.1, no_bias=False, initial_bias=0):
         super(AdaptiveWeightNoise, self).__init__()
         self.out_size = out_size
         self.in_size = in_size
         self.normal_scale = normal_scale
-        self.nobias = nobias
+        self.no_bias = no_bias
         self.initial_bias = initial_bias
 
         with self.init_scope():
-            if nobias:
-                self.mu = chainer.Parameter(chainer.initializers.Normal(1))
+            if no_bias:
+                self.mu = chainer.Parameter(chainer.initializers.Normal(self.normal_scale))
             else:
                 self.mu = chainer.Parameter(NormalBias(self.out_size, self.normal_scale, self.initial_bias))
 
@@ -48,7 +48,7 @@ class AdaptiveWeightNoise(chainer.Link):
 
             self.in_size = in_size
 
-        if self.nobias:
+        if self.no_bias:
             return F.reshape(self.mu, (self.out_size, self.in_size)), None
         else:
             w, b = F.split_axis(self.mu, [self.out_size*(self.in_size-1)], axis=0)
@@ -84,7 +84,7 @@ class AdaptiveWeightNoise(chainer.Link):
         loss = F.reshape(F.sum(loss_x + loss_y), (1,)) / batch_size
 
         # Extract the bias if required
-        if self.nobias:
+        if self.no_bias:
             return F.reshape(W, (self.out_size, self.in_size)), None, loss
         else:
             w, b = F.split_axis(W, self.xp.asarray([self.out_size*(self.in_size-1)]), axis=0)
