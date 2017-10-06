@@ -87,6 +87,6 @@ class AdaptiveWeightNoise(chainer.Link):
         if self.no_bias:
             return F.reshape(W, (self.out_size, self.in_size)), None, loss
         else:
-            w, b = F.split_axis(W, self.xp.asarray([self.out_size*(self.in_size-1)]), axis=0)
+            w, b = F.split_axis(W, [self.out_size*(self.in_size-1)], axis=0)
             return F.reshape(w, (self.out_size, self.in_size-1)), b, loss
 
