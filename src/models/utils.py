@@ -54,3 +54,54 @@ def mean_squared_error(true, pred):
     """
     xp = cuda.get_array_module(*pred)
     return xp.sum(xp.square(true - pred)) / pred.size
+
+def get_max_sequence_length(sequences):
+    length = []
+    for i in xrange(len(sequences)):
+        length.extend([sequences[i].size])
+    return int(np.asarray(length).max())
+
+def group_data(data, characters):
+    if len(data) != len(characters):
+        raise ValueError("data should have the same amount of characters")
+
+    xp = cuda.get_array_module(*data)
+    grouped = []
+    for i in xrange(len(data)):
+        grouped.append(xp.asarray([data[i], characters[i]]))
+
+    return xp.vstack(grouped)
+
+def pad_data(data, characters):
+    max_length_data = 0
+    max_length_characters = 0
+    # Get the maximum length of each arrays
+    tmp1 = []
+    tmp2 = []
+    for i in xrange(len(data)):
+        if len(data[i]) > max_length_data:
+            max_length_data = len(data[i])
+
+    # Pad each arrays to be the same length
+    for i in xrange(len(data)):
+        if len(data[i]) != max_length_data:
+            pad_length = max_length_data-len(data[i])
+            pad = np.full((pad_length, 3), 0)
+            pad[:, 2] = 2.
+            data[i] = np.vstack([data[i], pad])
+        tmp1.append(np.asarray(data[i]))
+        tmp2.append(np.asarray(characters[i]))
+    
+    return np.asarray(tmp1), np.asarray(tmp2) 
+
+def one_hot(data, characters, n_chars, n_max_seq_length):
+    xp = cuda.get_array_module(*data)
+    cs = xp.zeros((len(data), n_chars, n_max_seq_length), dtype=xp.float32)
+
+    for i in xrange(len(data)):
+        for j in xrange(len(characters[i])):
+            k = characters[i][j]
+            cs[i, k, j] = 1.0
+
+    return cs
+
