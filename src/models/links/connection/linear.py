@@ -11,11 +11,12 @@ class Linear(chainer.Link):
         Returns:
             float[][]
     """
-    def __init__(self, in_size, out_size):
+    def __init__(self, in_size, out_size, no_bias=False):
         super(Linear, self).__init__()
 
         self.out_size = out_size
         self.in_size = in_size
+        self.no_bias = no_bias
 
         with self.init_scope():
             self.W = chainer.Parameter(chainer.initializers.Normal(0.075))
@@ -52,4 +53,7 @@ class Linear(chainer.Link):
         if b is None:
             b = self.b
 
-        return F.linear(x, W, b)
+        if not self.no_bias:
+            return F.linear(x, W, b)
+        else:
+            return F.linear(x, W)
