@@ -96,6 +96,16 @@ def pad_data(data, characters):
 def one_hot(data, characters, n_chars, n_max_seq_length):
     xp = cuda.get_array_module(*data)
     cs = xp.zeros((len(data), n_chars, n_max_seq_length), dtype=xp.float32)
+    cs = xp.array([
+        xp.concatenate([
+            xp.eye(n_chars, dtype=xp.float32)[l],
+            xp.zeros((n_max_seq_length - len(l) + 1, n_chars), dtype=xp.float32)],
+            axis=0)
+        for l in characters
+    ])
+    print(cs.shape)
+    exit()
+
 
     for i in xrange(len(data)):
         for j in xrange(len(characters[i])):
