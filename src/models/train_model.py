@@ -268,6 +268,8 @@ class Model(chainer.Chain):
         loss_left = F.log(loss_left + epsilon)
         loss = F.mean(-loss_left - loss_right)
 
+        del in_coords, out_coords, data, cs, outs
+
         return loss
 
 # ===============================================
@@ -369,10 +371,48 @@ def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, r
     history_valid = []
     n_batches = None
 
+    # Exponential Decay on learning rate helper
+    def exponential_decay(base_learning_rate, decay_steps, decay_rate, staircase=False, optimizer_lr_attr="lr"):
+        """
+        Lower the learning rate of the optimizer via an exponential decay
+        Args:
+            base_learning_rate (float): initial learning rate
+            decay_steps (int): divided by the current steps
+            decay_rate (float): multiplied to (current_steps/decay_steps)
+            staircase (bool): if true, the learning rate takes a discrete interval
+        Returns:
+            (Function) function computing the decayed learning rate at each iteration
+
+        Example:
+            lr_decay = exponential_decay(0.001, 10000, 0.5, staircase=True)
+            ...
+            current_iteration = 0
+            for batch in mini_batch:
+                ...
+                optimizer.lr = lr_decay(optimizer.t)
+        """
+        def cb(current_step):
+            """
+            Called every iteration, return the decayed learning rate
+            Args:
+                current_step (int): current iteration number
+            Returns:
+                (float) the decayed learning rate
+            """
+            steps = current_step / decay_steps
+            if staircase:
+                steps = math.floor(steps)
+            return base_learning_rate * (decay_rate ** steps)
+
+        return cb
+
     batches_per_epoch = 1000
+    itr = 0
+    lr_decay = exponential_decay(learning_rate, 10000, 0.5, staircase=True)
     logger.info("Starting training with {0} mini-batches for {1} epochs".format(batches_per_epoch, epochs))
     for e in xrange(offset_epoch, epochs):
-        logger.info("Epoch #{0}/{1}".format(e, epochs))
+        logger.info("Epoch #{0}/{1}".format(e+1, epochs))
+        loss_t = 0
         for b in xrange(1, batches_per_epoch+1):
             time_iteration_start = time.time()
             coords, seq, reset, needed = batch_generator.next_batch()
@@ -382,14 +422,26 @@ def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, r
 
             """ Train the model """
             model.cleargrads()
-            loss_t = model([xp.asarray(coords), xp.asarray(seq)])
+            loss_t += model([xp.asarray(coords), xp.asarray(seq)])
+
+            # Truncated back-propagation
+            #if (b+1)%10 == 0:
+            #    model.cleargrads()
+            #    loss_t.backward()
+            #    loss_t.unchain_backward()
+            #    optimizer.update()
+
             loss_t.backward()
             optimizer.update()
             loss = cuda.to_cpu(loss_t.data)
-
             time_iteration_end = time.time()-time_iteration_start
+
+            # Exponential decay on the learning rate
+            optimizer.alpha = lr_decay(optimizer.t)
+
             history_train.append([loss, time_iteration_end])
             logger.info("[TRAIN] Epoch #{0} ({1}/{2}): loss = {3}, time = {4}".format(e+1, b, batches_per_epoch, loss, time_iteration_end))
+            itr += 1
 
         # Compile global stats
         history_train = np.asarray(history_train)
