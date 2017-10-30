@@ -276,7 +276,7 @@ class Model(chainer.Chain):
 # Main entry point of the training process (main)
 # ===============================================
 
-def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, resume_dir, resume_model, resume_optimizer, resume_stats, gpu, save_interval, validation_interval, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed, learning_rate, debug):
+def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, resume_dir, resume_model, resume_optimizer, resume_stats, gpu, save_interval, validation_interval, truncated_backprop_interval, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed, learning_rate, debug):
     """ Save the args for this run """
     arguments = {}
     frame = inspect.currentframe()
@@ -408,37 +408,44 @@ def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, r
 
     batches_per_epoch = 1000
     itr = 0
-    lr_decay = exponential_decay(learning_rate, 10000, 0.5, staircase=True)
+    accum_loss = 0
+    if truncated_backprop_interval > 0:
+        lr_decay = exponential_decay(learning_rate, 1000, 0.5, staircase=True)
+    else:
+        lr_decay = exponential_decay(learning_rate, 10000, 0.5, staircase=True) # If no truncated bpp
+
     logger.info("Starting training with {0} mini-batches for {1} epochs".format(batches_per_epoch, epochs))
     for e in xrange(offset_epoch, epochs):
         logger.info("Epoch #{0}/{1}".format(e+1, epochs))
-        loss_t = 0
         for b in xrange(1, batches_per_epoch+1):
             time_iteration_start = time.time()
             coords, seq, reset, needed = batch_generator.next_batch()
             if needed:
-                print("Reset state")
+                #print("Reset state")
                 model.reset_state(xp.asarray(reset))
 
             """ Train the model """
-            model.cleargrads()
-            loss_t += model([xp.asarray(coords), xp.asarray(seq)])
+            loss_t = model([xp.asarray(coords), xp.asarray(seq)])
+            accum_loss += loss_t
 
             # Truncated back-propagation
-            #if (b+1)%10 == 0:
-            #    model.cleargrads()
-            #    loss_t.backward()
-            #    loss_t.unchain_backward()
-            #    optimizer.update()
+            if truncated_backprop_interval == 0 or (b+1)%truncated_backprop_interval == 0 or b == batches_per_epoch+1:
+                model.cleargrads()
+                accum_loss.backward()
 
-            loss_t.backward()
-            optimizer.update()
+                if truncated_backprop_interval > 0:
+                    accum_loss.unchain_backward()
+
+                optimizer.update()
+                
+                # Exponential decay on the learning rate
+                optimizer.alpha = lr_decay(optimizer.t)
+                accum_loss = 0
+
             loss = cuda.to_cpu(loss_t.data)
+            del loss_t
+
             time_iteration_end = time.time()-time_iteration_start
-
-            # Exponential decay on the learning rate
-            optimizer.alpha = lr_decay(optimizer.t)
-
             history_train.append([loss, time_iteration_end])
             logger.info("[TRAIN] Epoch #{0} ({1}/{2}): loss = {3}, time = {4}".format(e+1, b, batches_per_epoch, loss, time_iteration_end))
             itr += 1
@@ -499,6 +506,7 @@ def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, r
 @click.option('--gpu', type=click.INT, default=-1, help='GPU ID (negative value is CPU).')
 @click.option('--save_interval', type=click.INT, default=10, help='How often the model should be saved.')
 @click.option('--validation_interval', type=click.INT, default=1, help='How often the model should be validated.')
+@click.option('--truncated_backprop_interval', type=click.INT, default=10, help='Run the truncated backpropagation algorithm at each n iteration.')
 @click.option('--rnn_layers_number', type=click.INT, default=3, help='Number of layers for the RNN.')
 @click.option('--rnn_cells_number', type=click.INT, default=400, help='Number of LSTM cells per layer.')
 @click.option('--win_unit_number', type=click.INT, default=10, help='Number of soft-window components.')
