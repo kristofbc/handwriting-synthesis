@@ -175,8 +175,8 @@ class Model(chainer.Chain):
             self.layer_mixture_density = MixtureDensity(self._output_mixtures, bias)
 
     def to_gpu(self, device=None):
-        super(Model, self).to_gpu(self, device)
-        for i in self.layer_lstms:
+        super(Model, self).to_gpu(device)
+        for i in xrange(len(self.layer_lstms)):
             self.layer_lstms[i].to_gpu(device)
 
     def reset_state(self, state=None):
@@ -212,8 +212,8 @@ class Model(chainer.Chain):
             #    print(self._states[s].shape)
             #exit()
 
-        in_coords = self.xp.asarray(data[:, :-1, :]) # (batch_size, time step, coord)
-        out_coords = self.xp.asarray(data[:, 1:, :])
+        in_coords = data[:, :-1, :] # (batch_size, time step, coord)
+        out_coords = data[:, 1:, :]
 
         # Unroll the RNN for each time steps
         outs = None
@@ -378,11 +378,11 @@ def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, r
             coords, seq, reset, needed = batch_generator.next_batch()
             if needed:
                 print("Reset state")
-                model.reset_state(reset)
+                model.reset_state(xp.asarray(reset))
 
             """ Train the model """
             model.cleargrads()
-            loss_t = model([coords, seq])
+            loss_t = model([xp.asarray(coords), xp.asarray(seq)])
             loss_t.backward()
             optimizer.update()
             loss = cuda.to_cpu(loss_t.data)
