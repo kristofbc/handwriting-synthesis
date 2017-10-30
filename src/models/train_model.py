@@ -50,7 +50,7 @@ log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 # ============
 # Links (lnks)
 # ============
-class SoftWindow(chainer.Link):
+class SoftWindow(chainer.Chain):
     """
         Attention mechanism: SoftWindow
         Args:
@@ -101,7 +101,7 @@ class SoftWindow(chainer.Link):
         finish = F.expand_dims(finish, axis=1)
         return window, k, phi, finish
 
-class MixtureDensity(chainer.Link):
+class MixtureDensity(chainer.Chain):
     """
         MixtureDensity layer
         Args:
@@ -174,6 +174,11 @@ class Model(chainer.Chain):
             self.layer_lstms = [L.StatelessLSTM(self._num_units) for _ in xrange(self._rnn_layers)]
             self.layer_mixture_density = MixtureDensity(self._output_mixtures, bias)
 
+    def to_gpu(self, device=None):
+        super(Model, self).to_gpu(self, device)
+        for i in self.layer_lstms:
+            self.layer_lstms[i].to_gpu(device)
+
     def reset_state(self, state=None):
         """
             Reset the model to the inital state
@@ -207,8 +212,8 @@ class Model(chainer.Chain):
             #    print(self._states[s].shape)
             #exit()
 
-        in_coords = data[:, :-1, :] # (batch_size, time step, coord)
-        out_coords = data[:, 1:, :]
+        in_coords = self.xp.asarray(data[:, :-1, :]) # (batch_size, time step, coord)
+        out_coords = self.xp.asarray(data[:, 1:, :])
 
         # Unroll the RNN for each time steps
         outs = None
@@ -374,7 +379,6 @@ def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, r
             if needed:
                 print("Reset state")
                 model.reset_state(reset)
-
 
             """ Train the model """
             model.cleargrads()
