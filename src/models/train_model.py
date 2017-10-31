@@ -509,10 +509,10 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
                     model.reset_state()
                     for b in xrange(batches_per_epoch_valid):
                         time_iteration_start = time.time()
-                        coords, seq, reset, needed = batch_generator_train.next_batch()
+                        coords, seq, reset, needed = batch_generator_validation.next_batch()
                         if needed:
                             #print("Reset state")
-                            model.reset_state()
+                            model.reset_state(xp.asarray(reset))
 
                         loss_t = model([xp.asarray(coords), xp.asarray(seq)])
                         loss = cuda.to_cpu(loss_t.data)
