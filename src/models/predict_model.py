@@ -15,7 +15,6 @@ except:
     pass
 
 from train_model import Model
-from train_model import get_max_sequence_length
 
 import click
 import os
@@ -33,102 +32,6 @@ import matplotlib.patches as patches
 # Helpers functions
 # =================
 
-
-def get_char_to_index(text, vocabulary=None):
-    """
-        Get the index corresponding to the character
-
-        Args:
-            text (str): the text to convert
-            vocabulary (dict): available vocabulary
-        Returns:
-            (int[])
-    """
-    vocab = vocabulary if vocabulary is not None else {}
-    cha_index = []
-    for l in text:
-        tmp = []
-        for s in l:
-            dataset = np.ndarray(len(s[0]), dtype=np.int32)
-            for i, cha in enumerate(s[0]):
-                if cha not in vocabulary:
-                    if vocabulary is not None:
-                        raise ValueError("Character '{}' is not in vocabulary.".format(cha))
-                    else:
-                        vocab[cha] = len(vocab)
-
-                dataset[i] = vocab[cha]
-            tmp.extend(dataset)
-        cha_index.append(np.asarray(tmp))
-    return cha_index, vocab
-
-def draw_from_strokes(strokes, plt_inst=None):
-    """
-        Draw the image based on the strokes array
-
-        Args:
-            strokes (int[][]): An array containing the position of the strokes
-            plt_inst (pyplot): An instance of matplotlib\\pyplot
-        Returns:
-            (pyplot)
-    """
-    if plt_inst is None:
-        plt_inst = plt
-
-    # Remove the last position
-    last = [0,0,0]
-
-    positions = []
-    pos_list = [[], []]
-    for point in strokes:
-        # New letter
-        if point[2] == 1:
-            positions = positions + pos_list
-            pos_list = [[], []]
-
-        sum_x = last[0]+point[0]
-        sum_y = last[1]+point[1]
-        last = [sum_x, sum_y]
-
-        # Continue the current letter
-        if point[2] != 1:
-            pos_list[0].append(sum_x)
-            pos_list[1].append(sum_y)
-
-    plt_inst.gca().invert_yaxis()
-    plt_inst.plot(*positions)
-    return plt_inst
-
-
-def visualize_dataset(data_index, data_dir, train_set=True):
-    if not os.path.exists(data_dir):
-        raise ValueError("Directory {} does not exists".format(data_dir))
-
-    data_index = int(data_index)
-    suffix = "train" if train_set is True else "valid"
-    data = np.load(data_dir + "/{0}/{1}_data".format(suffix, suffix))
-    texts = np.load(data_dir + "/{0}/{1}_text".format(suffix, suffix))
-    stats = np.load(data_dir + "/statistics")
-
-    if data_index > len(data) or data_index > len(texts):
-        raise ValueError("Data index {} does not exists in dataset".format(data_index))
-    
-    strokes = data[data_index]
-    text = texts[data_index]
-
-    # Must "un-normalize" the data
-    strokes[:, 1] *= stats[3]
-    strokes[:, 0] *= stats[2]
-    strokes[:, 1] += stats[1]
-    strokes[:, 0] += stats[0]
-
-    # Draw the generate handwritten text
-    plt.figure(1)
-    plt.subplot("{0}{1}{2}".format(1, 1, 1))
-    plt.title(text)
-    draw_from_strokes(strokes, plt)
-    plt.show()
-
 # ===============================================
 # Main entry point of the training process (main)
 # ===============================================
@@ -141,165 +44,153 @@ def main(model_dir, model_name, text, models_dir, data_dir, prime_index, batchsi
         raise ValueError("Directory {} does not exists".format(path))
 
     """ Import required data """
-    logger.info("Importing dataset")
-    original_vocabulary = np.load(data_dir + "/vocabulary")
-    stats = np.load(data_dir + "/statistics")
-    train_data = np.load(data_dir + "/train/train_data")
-    train_characters = np.load(data_dir + "/train/train_characters")
-    vocabulary = np.load(data_dir + "/vocabulary")
+    translation = np.load(os.path.join(data_dir, 'translation'))
+    rev_translation = {v: k for k, v in translation.items()}
+    charset = [rev_translation[i] for i in range(len(rev_translation))]
+    charset[0] = ''
 
-    """ Parse the input character sequences """
-    # Create the vocabulary array
-    logger.info("Parsing the input character sequence")
-    data_index = []
-    if not isinstance(text, list):
-        # Special case when user wants to visualize data set
-        if "dataset:" in text:
-            logger.info("Visualizing dataset")
-            data_index = text[len("dataset:"):]
-            visualize_dataset(data_index[:data_index.index(":")], data_dir, True if data_index[data_index.index(":")+1:] == "train" else False)
-            return
-        # Special case when the user wants to compare the generation against ground true
-        elif "gt:" in text:
-            logger.info("Importing requested ground-truth")
-            data_index = text[len("gt:"):]
-            
-            if data_index == "*":
-                data_index = range(len(train_data))
-
-            if isinstance(data_index, basestring):
-                data_index = [int(data_index)]
-
-            text = []
-            inv_map = {v: k for k, v in original_vocabulary.iteritems()}
-            for idx in data_index:
-                if idx > len(train_data):
-                    raise ValueError("Index {} is not in training set".format(idx))
-                
-                tmp = ''.join([inv_map[char_idx] for char_idx in train_characters[idx]])
-                text.append(tmp)
-        # Default text parameter
-        else:
-            text = [text]
-
-    #n_chars = len(vocabulary)
-    # @TODO: character size should be dynamic (83 is the length of the current data)
-    n_chars = 81#len(vocab)
-    
-    """ Import the trained model """
+    """ Load the model """
     logger.info("Importing the model {}".format(model_name))
-    input_size = 3 # dimensions of x (x, y, end-of-stroke)
+    model = Model(rnn_cells_number, rnn_layers_number, mix_comp_number, win_unit_number)
 
-    # @TODO: should check if peephole is requested
-    #n_chars_training = len(original_vocabulary)
-    model = Model(rnn_layers_number, rnn_cells_number, mix_comp_number, win_unit_number)
-    
     if gpu >= 0:
         chainer.cuda.get_device(gpu).use()
         model.to_gpu()
         xp = cupy
     else:
         xp = np
-
-    # Load the model
-    logger.info("Model imported successfully")
+    
     chainer.serializers.load_npz(path + "/" + model_name, model)
+    logger.info("Model imported successfully")
 
-    """ Priming """
-    # Priming consist of using the original author's sentence, then appending the new sentence to it
-    if prime_index == -2:
-        # display available authors styles
-        logger.info("Available styles between: {0} and {1}".format(0, len(train_data)-1))
-        logger.info('To visualize a style: TEXT="dataset:{styleid}:train')
-        exit()
+    """ Proceed to sampling """
+    text_chars = np.asarray([translation.get(c, 0) for c in text])
+    coords = np.asarray([0., 0., 1.])
+    coords = [coords]
 
-    if prime_index != -1:
-        if prime_index > len(train_data):
-            raise ValueError("Prime index is not in train_data")
+    # Priming
+    style = None
+    prime_len = 0
+    if prime_index > -1:
+        # Priming consist of first training the network with the character sequence + strokes then
+        #   generating the requested sequence of character and finally clipping the output to the requested character
+        styles = np.load(os.path.join(data_dir, 'styles'))
+        if prime_index > len(styles[0]):
+            raise ValueError("Prime index does not exists")
+        
+        style_coords = styles[0][prime_index]
+        style_text = styles[1][prime_index]
+        prime_len = len(style_coords)
+        coords = list(style_coords)
+        coord = coords[0] # Set the first pen stroke as the first element to process
+        text_chars = np.r_[style_text, text_chars] # Concatenate on axis 1 the prime text + synthesis text ascii characters
+        sequence_prime = np.eye(len(translation), dtype=np.float32)[style_text]
+        sequence_prime = np.expand_dims(np.concatenate([sequence_prime, np.zeros((1, len(translation)))]), axis=0)
 
-        text_train_character, _ = get_char_to_index(text, vocabulary)
-        batchsize = len(text_train_character)
-        n_max_seq_length = get_max_sequence_length(text_train_character)
+    sequence = np.eye(len(translation), dtype=np.float32)[text_chars]
+    sequence = np.expand_dims(np.concatenate([sequence, np.zeros((1, len(translation)))]), axis=0)
 
-        t_max_prime, x_dim_prime = train_data[prime_index].shape
-        t_data_prime = np.where(train_data[prime_index][:, 2] == 2)[0].min()
+    phi_data, window_data, kappa_data, stroke_data, lstms_cs_data, lstms_hs_data = [], [], [], [], [], []
+    model.reset_state()
+    losses = []
+    for s in xrange(1, 60 * len(text_chars) + 1):
+        is_priming = False
+        if s < prime_len: # [0, prime_len] is priming, [prime_len+1, inf] is synthesis
+            is_priming = True
 
-        prime_data_original = train_data[prime_index][0:t_data_prime, :]
-        prime_data_original = np.expand_dims(prime_data_original, axis=0)
-        prime_data = prime_data_original.copy()
-        for i in xrange(batchsize-1):
-            prime_data = np.r_[prime_data, prime_data_original]
+        logger.info("[{:5d}] Sampling ... {}".format(s, "priming" if is_priming else "synthesis"))
 
-        prime_train_characters_data = train_characters[prime_index]
-        prime_len = len(prime_train_characters_data)
-        prime_train_characters = []
-        for i in xrange(batchsize):
-            prime_train_characters.append(np.r_[prime_train_characters_data, text_train_character[i]])
+        coord = coord[None, None, ...]
+        coord = np.concatenate((coord, coord), axis=1)
+        loss_t = model([
+            coord.astype(np.float32),
+            sequence_prime.astype(np.float32) if is_priming else sequence.astype(np.float32)
+        ])
+        
 
-    else:
-        batchsize = 1
-        n_max_seq_length = get_max_sequence_length(train_characters)
-        t_data_prime = 0
-        prime_len = 0
-        prime_train_characters = train_characters
+        if is_priming:
+            # Use the real coordinate when priming
+            coord = coords[s]
+        else:
+            # Synthesis mode
+            def sample(e, mu1, mu2, s1, s2, rho):
+                cov = np.asarray([[s1 * s1, s1 * s2 * rho], [s1 * s2 * rho, s2 * s2]])
+                mean = np.asarray([mu1, mu2])
+                
+                x1, x2 = np.random.multivariate_normal(mean, cov)
+                end = np.random.binomial(1, e)
+                return np.asarray([x1, x2, end])
 
-    """ Create the one-hot vocabulary sequence """
-    #batchsize = len(text)
-    #batchsize = len(train_characters)
-    cs_data = xp.zeros((batchsize, n_chars, n_max_seq_length + prime_len)).astype(xp.float32)
-    ls_data = xp.zeros((batchsize, 1))
-    for j in xrange(batchsize):
-        for k in xrange(len(prime_train_characters[j])):
-            length = prime_train_characters[j][k]
-            cs_data[j, length, k] = 1.0
-        ls_data[j, 0] = k
+            e, pi, mu1, mu2, s1, s2, rho = model.get_mdn()
+            e = chainer.cuda.to_cpu(e.data)
+            pi = chainer.cuda.to_cpu(pi.data)
+            mu1 = chainer.cuda.to_cpu(mu1.data)
+            mu2 = chainer.cuda.to_cpu(mu2.data)
+            s1 = chainer.cuda.to_cpu(s1.data)
+            s2 = chainer.cuda.to_cpu(s2.data)
+            rho = chainer.cuda.to_cpu(rho.data)
 
-    # @TODO: Make sure the length of the data match the input of the model
-    #pad = xp.zeros((1, min(n_chars_training, abs(n_chars_training-n_chars)), n_max_seq_length)).astype(xp.float32)
-    #pad.fill(2.0)
-    #cs_data = xp.concatenate((cs_data, pad), axis=1)
+            g = np.random.choice(np.arange(pi.shape[1]), p=pi[0])
+            coord = sample(e[0, 0], mu1[0, g], mu2[0, g], s1[0, g], s2[0, g], rho[0, g])
+            coords += [coord]
+            stroke_data += [[mu1[0, g], mu2[0, g], s1[0, g], s2[0, g], rho[0, g], coord[2]]]
+            
+            # Extract LSTM data here
+            # ...
 
-    with chainer.no_backprop_mode(), chainer.using_config('train', False):
-        for j in xrange(len(text)):
-            #x_data = xp.zeros((batchsize, 3)).astype(xp.float32)
-            #x_next_data = xp.ones((batchsize, 3)).astype(xp.float32) * (-1.0)
+            window, kappa, finish, phi = model.get_window()
+            window = chainer.cuda.to_cpu(window.data)
+            kappa = chainer.cuda.to_cpu(kappa.data)
+            finish = chainer.cuda.to_cpu(finish.data)
+            phi = chainer.cuda.to_cpu(phi.data)
 
-            prob_bias = 0.0
-            loss_network = xp.zeros((batchsize, 1))
+            phi_data += [phi[0, :]]
+            window_data += [window[0, :]]
+            kappa_data += [kappa[0, :]]
 
-            # The loop is defined by the backprop length
-            strokes = []
-            mse = 0
+            if finish[0, 0] > 0.8:
+                break
 
-            cursor = truncated_back_prop_len if len(data_index) == 0 else len(train_data[data_index[j]])-1
-            cursor += t_data_prime
-            mdn_states = np.zeros((batchsize, cursor, 1 + 6*mix_comp_number + 1 + 3 + 3))
-            n_batches = variable.Variable(xp.ones(1).astype(xp.float32)*len(train_data))
+    logger.info("Finished sampling")
+    coords = np.asarray(coords[prime_len:])
+    coords[-1, 2] = 1.
 
-            if prime_len > 0:
-                x_data = prime_data
-                x_data = xp.concatenate((x_data, xp.zeros((1, cursor-t_data_prime, input_size)).astype(xp.float32)), axis=1)
-                #x_data = xp.zeros((1, cursor, input_size)).astype(xp.float32)
-            else:
-                x_data = xp.zeros((1, cursor, input_size)).astype(xp.float32)
+    """ Save the synthesis data """
+    # Save the data ...
+    #np.save(os.path.join(path, model_name, '{}-lstm-cs.npy'.format(now)), lstm_cs)
+    #np.save(os.path.join(path, model_name, '{}-lstm-hs.npy'.format(now)), lstm_hs)
+    #np.save(os.path.join(path, model_name, '{}-window.npy'.format(now)), window_data)
+    #np.save(os.path.join(path, model_name, '{}-phi.npy'.format(now)), phi_data)
+    #np.save(os.path.join(path, model_name, '{}-stroke.npy'.format(now)), stroke_data)
+    #np.save(os.path.join(path, model_name, '{}-coords.npy'.format(now)), coords)
 
-            loss_network, strokes, mdn_components = model.sample(x_data, cs_data, n_batches, t_data_prime)
-            states = xp.concatenate((mdn_components, xp.full((mdn_components.shape[0], 1), loss_network), strokes), axis=1)
+    """ Plot the data """
+    epsilon = 1e-8
+    strokes = np.array(stroke_data)
+    strokes[:, :2] = np.cumsum(strokes[:, :2], axis=0)
+    minx1, maxx1 = np.min(strokes[:, 0]), np.max(strokes[:, 0])
+    minx2, maxx2 = np.min(strokes[:, 1]), np.max(strokes[:, 1])
 
-            # Concatenate the ground-truth
-            if len(data_index) == 0:
-                states = xp.concatenate((states, xp.zeros_like(strokes)), axis=1)
-            else:
-                if t_data_prime > 0:
-                    fill_train = xp.concatenate((train_data[prime_index][0:t_data_prime-1, :], train_data[data_index[j]]), axis=0)
-                else:
-                    fill_train = train_data[data_index[j]]
+    def split_strokes(points):
+        points = np.asarray(points)
+        strokes = []
+        b = 0
+        for i in range(len(points)):
+            if points[i, 2] == 1.:
+                strokes += [points[b: i + 1, :2].copy()]
+                b = i + 1
+        return strokes
 
-                states = xp.concatenate((states, fill_train), axis=1)
+    def cumsum(points):
+        sums = np.cumsum(points[:, :2], axis=0)
+        return np.concatenate([sums, points[:, 2:]], axis=1)
 
-            # Save the results
-            np.save(path + "/{0}-mdn.npy".format(text[j].replace(" ", "-")), np.asarray([states]))
-            model.reset_state()
+    plt.figure(1)
+    plt.title(text)
+    for stroke in split_strokes(cumsum(np.asarray(coords))):
+        plt.plot(stroke[:, 0], -stroke[:, 1])
+    plt.axes().set_aspect('equal')
+    plt.show()
 
 # ===============
 # CLI Entry point
@@ -310,7 +201,7 @@ def main(model_dir, model_name, text, models_dir, data_dir, prime_index, batchsi
 @click.argument('model_name', type=click.STRING)
 @click.argument('text', type=click.STRING)
 @click.option('--models_dir', type=click.Path(exists=True), default='models', help='Directory containing the models.')
-@click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWriting', help='Directory containing data.')
+@click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWriting/tf', help='Directory containing data.')
 @click.option('--prime_index', type=click.INT, default=-1, help='Priming index.')
 @click.option('--batchsize', type=click.INT, default=1, help='Control the number of MDN outputs.')
 @click.option('--gpu', type=click.INT, default=-1, help='ID of the gpu to use')

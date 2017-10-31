@@ -201,6 +201,7 @@ class Model(chainer.Chain):
         self._output_mixtures = output_mixtures
         self._states = None
         self._e, self._pi, self._mu1, self._mu2, self._s1, self._s2, self._rho = None, None, None, None, None, None, None
+        self._window, self._phi, self._kappa, self._finish = None, None, None, None
 
         with self.init_scope():
             self.layer_window = SoftWindow(self._window_mixtures)
@@ -226,6 +227,16 @@ class Model(chainer.Chain):
                     self._states[s] *= state
 
         self._e, self._pi, self._mu1, self._mu2, self._s1, self._s2, self._rho = None, None, None, None, None, None, None
+        self._window, self._phi, self._kappa, self._finish = None, None, None, None
+
+    def get_mdn(self):
+        return self._e, self._pi, self._mu1, self._mu2, self._s1, self._s2, self._rho
+
+    def get_window(self):
+        # self._states[-3] = window
+        # self._states[-2] = k
+        # self._states[-1] = finish
+        return self._states[-3], self._states[-2], self._states[-1], self._phi
 
     def __call__(self, inputs):
         """
@@ -276,11 +287,13 @@ class Model(chainer.Chain):
                     window, k, phi, finish = self.layer_window(h_new, cs, k)
 
             self._states = state_output + [window, k, finish]
+            self._phi = phi
             outs = F.expand_dims(output_prev[0], axis=0) if outs is None else F.concat((outs, F.expand_dims(output_prev[0], axis=0)), axis=0)
 
         # MDN
         outs = F.reshape(outs, (-1, self._num_units))
         e, pi, mu1, mu2, s1, s2, rho = self.layer_mixture_density(outs)
+        self._e, self._pi, self._mu1, self._mu2, self._s1, self._s2, self._rho = e, pi, mu1, mu2, s1, s2, rho
 
         # Loss 
         coords = F.reshape(out_coords, (-1, 3))
