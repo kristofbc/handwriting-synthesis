@@ -15,6 +15,7 @@ from logging.handlers import RotatingFileHandler
 from logging import handlers
 
 import numpy as np
+import scipy.stats
 import cPickle as pickle
 
 try:
@@ -61,9 +62,9 @@ class SoftWindow(chainer.Chain):
         self._num_mixtures = num_mixtures
         
         with self.init_scope():
-            self.layer_linear_alpha = L.Linear(self._num_mixtures, initialW=initializers.normal.Normal(0.075))
-            self.layer_linear_beta = L.Linear(self._num_mixtures, initialW=initializers.normal.Normal(0.075))
-            self.layer_linear_kappa = L.Linear(self._num_mixtures, initialW=initializers.normal.Normal(0.075))
+            self.layer_linear_alpha = L.Linear(self._num_mixtures, initialW=TruncatedNormal(std=0.075))
+            self.layer_linear_beta = L.Linear(self._num_mixtures, initialW=TruncatedNormal(std=0.075))
+            self.layer_linear_kappa = L.Linear(self._num_mixtures, initialW=TruncatedNormal(std=0.075))
 
     def __call__(self, x, cs, k_prev):
         """
@@ -113,13 +114,13 @@ class MixtureDensity(chainer.Chain):
         self._bias = bias
 
         with self.init_scope():
-            self.layer_linear_e = L.Linear(1, initialW=initializers.normal.Normal(0.075))
-            self.layer_linear_pi = L.Linear(self._num_mixtures, initialW=initializers.normal.Normal(0.075))
-            self.layer_linear_mu1 = L.Linear(self._num_mixtures, initialW=initializers.normal.Normal(0.075))
-            self.layer_linear_mu2 = L.Linear(self._num_mixtures, initialW=initializers.normal.Normal(0.075))
-            self.layer_linear_s1 = L.Linear(self._num_mixtures, initialW=initializers.normal.Normal(0.075))
-            self.layer_linear_s2 = L.Linear(self._num_mixtures, initialW=initializers.normal.Normal(0.075))
-            self.layer_linear_rho = L.Linear(self._num_mixtures, initialW=initializers.normal.Normal(0.075))
+            self.layer_linear_e = L.Linear(1, initialW=TruncatedNormal(std=0.075))
+            self.layer_linear_pi = L.Linear(self._num_mixtures, initialW=TruncatedNormal(std=0.075))
+            self.layer_linear_mu1 = L.Linear(self._num_mixtures, initialW=TruncatedNormal(std=0.075))
+            self.layer_linear_mu2 = L.Linear(self._num_mixtures, initialW=TruncatedNormal(std=0.075))
+            self.layer_linear_s1 = L.Linear(self._num_mixtures, initialW=TruncatedNormal(std=0.075))
+            self.layer_linear_s2 = L.Linear(self._num_mixtures, initialW=TruncatedNormal(std=0.075))
+            self.layer_linear_rho = L.Linear(self._num_mixtures, initialW=TruncatedNormal(std=0.075))
 
     def __call__(self, x):
         """
@@ -147,6 +148,38 @@ class MixtureDensity(chainer.Chain):
 # ==================
 # Initializer (init)
 # ==================
+class TruncatedNormal(initializer.Initializer):
+
+    """Initialize an array with a truncated normal distribution
+
+    All values with more than 'magnitude' standard deviation from the mean are dropped and re-picked.
+    Similar to TensorFlow:truncated_normal and Keras:truncated_normal
+
+    Args:
+        mean (float): mean of the normal distribution
+        std (float): standard deviation of the normal distribution
+        magnitude (int): magnitude of the value from the mean before re-sampling
+        dtype: Data type specifier
+    """
+
+    def __init__(self, mean=0.0, std=1.0, magnitude=2., dtype=None):
+        self.mean = mean
+        self.std = std
+        self.magnitude = magnitude
+        super(TruncatedNormal, self).__init__(dtype)
+
+    def __call__(self, array):
+        if self.dtype is not None:
+            assert array.dtype == self.dtype
+            dtype = self.dtype
+        else:
+            dtype = array.dtype
+
+        xp = cuda.get_array_module(array)
+        a, b = self.mean - self.magnitude * self.std, self.mean + self.magnitude * self.std
+        # Use scipy truncated normal function
+        dist = scipy.stats.truncnorm.rvs(a, b, loc=self.mean, scale=self.std, size=array.shape)
+        array[...] = xp.asarray(dist).astype(dtype)
 
 # =============
 # Models (mdls)
@@ -276,7 +309,7 @@ class Model(chainer.Chain):
 # Main entry point of the training process (main)
 # ===============================================
 
-def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, resume_dir, resume_model, resume_optimizer, resume_stats, gpu, save_interval, validation_interval, truncated_backprop_interval, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed, learning_rate, debug):
+def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split, epochs, grad_clip, resume_dir, resume_model, resume_optimizer, resume_stats, gpu, save_interval, validation_interval, truncated_backprop_interval, rnn_layers_number, rnn_cells_number, win_unit_number, mix_comp_number, random_seed, learning_rate, debug):
     """ Save the args for this run """
     arguments = {}
     frame = inspect.currentframe()
@@ -322,7 +355,11 @@ def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, r
 
     """ Fetching the model and the inputs """
     logger.info("Fetching the model and the inputs")
-    batch_generator = BatchGenerator(data_dir, batch_size, sequence_length)
+    dataset_size = BatchGenerator.dataset_size(data_dir)
+    validation_size = int(math.floor(dataset_size*validation_split))
+    train_size = int(dataset_size-validation_size)
+    batch_generator_train = BatchGenerator(data_dir, batch_size, min_sequence_length, 0, train_size)
+    batch_generator_validation = BatchGenerator(data_dir, batch_size, min_sequence_length, train_size)
 
     history_network_train = []
     history_network_valid = []
@@ -407,6 +444,7 @@ def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, r
         return cb
 
     batches_per_epoch = 1000
+    batches_per_epoch_valid = int(len(batch_generator_validation.dataset)/batch_size) # Compute all the batches inside one epoch
     itr = 0
     accum_loss = 0
     if truncated_backprop_interval > 0:
@@ -419,7 +457,7 @@ def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, r
         logger.info("Epoch #{0}/{1}".format(e+1, epochs))
         for b in xrange(1, batches_per_epoch+1):
             time_iteration_start = time.time()
-            coords, seq, reset, needed = batch_generator.next_batch()
+            coords, seq, reset, needed = batch_generator_train.next_batch()
             if needed:
                 #print("Reset state")
                 model.reset_state(xp.asarray(reset))
@@ -465,7 +503,41 @@ def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, r
 
         # Check if we should validate the data
         if e % validation_interval == 0:
-            print("Should validate")
+            with chainer.using_config('train', False):
+                with function.no_backprop_mode():
+                    # Reset completely the state before the validation
+                    model.reset_state()
+                    for b in xrange(batches_per_epoch_valid):
+                        time_iteration_start = time.time()
+                        coords, seq, reset, needed = batch_generator_train.next_batch()
+                        if needed:
+                            #print("Reset state")
+                            model.reset_state()
+
+                        loss_t = model([xp.asarray(coords), xp.asarray(seq)])
+                        loss = cuda.to_cpu(loss_t.data)
+                        del loss_t
+
+                        time_iteration_end = time.time()-time_iteration_start
+                        history_valid.append([loss, time_iteration_end])
+                        logger.info("[VALID] Epoch #{0} ({1}/{2}): loss = {3}, time = {4}".format(e+1, b, batches_per_epoch_valid, loss, time_iteration_end))
+
+                    # All the validation mini-batches are processed
+                    history_valid = np.asarray(history_valid)
+                    valid_mean = history_valid[:, 0].mean()
+                    valid_std = history_valid[:, 0].std()
+                    valid_min = history_valid[:, 0].min()
+                    valid_max = history_valid[:, 0].max()
+                    valid_med = np.median(history_valid)
+                    valid_time_sum = history_valid[:, 1].sum()
+                    history_network_valid.append([valid_mean, valid_std, valid_min, valid_max, valid_med, valid_time_sum])
+                    logger.info("[VALID] Epoch #{0} (COMPLETED IN {1}): mean = {2}, std = {3}, min = {4}, max = {5}, med = {6}"
+                                .format(e+1, valid_time_sum, valid_mean, valid_std, valid_min, valid_max, valid_med))
+
+                    # Completely reset the state for the next training phase
+                    model.reset_state()
+                    batch_generator_validation.reset()
+                    batch_generator_train.reset()
 
         # Check if we should save the data
         if e % save_interval == 0:
@@ -480,11 +552,11 @@ def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, r
 
             # Save the stats
             np.save(save_dir + '/history-network-train', np.asarray(history_network_train))
-            #np.save(save_dir + '/history-network-valid', np.asarray(history_network_valid))
+            np.save(save_dir + '/history-network-valid', np.asarray(history_network_valid))
 
         # Reset global epochs vars
         history_train = []
-        #history_valid = []
+        history_valid = []
 
 
 # ===============
@@ -496,7 +568,8 @@ def main(data_dir, output_dir, batch_size, sequence_length, epochs, grad_clip, r
 @click.option('--data_dir', type=click.Path(exists=True), default='data/processed/OnlineHandWriting/tf', help='Directory containing the data.')
 @click.option('--output_dir', type=click.Path(exists=False), default='models', help='Directory for model checkpoints.')
 @click.option('--batch_size', type=click.INT, default=64, help='Size of the mini-batches.')
-@click.option('--sequence_length', type=click.INT, default=256, help='Size of the mini-batches.')
+@click.option('--min_sequence_length', type=click.INT, default=256, help='Minimum size of a data sequence.')
+@click.option('--validation_split', type=click.FLOAT, default=0.15, help='Use this split size of the validation set.')
 @click.option('--epochs', type=click.INT, default=30, help='Number of epoch for training.')
 @click.option('--grad_clip', type=click.INT, default=3, help='Gradient clip value.')
 @click.option('--resume_dir', type=click.STRING, default='', help='Directory name for resuming the optimization from a snapshot.')

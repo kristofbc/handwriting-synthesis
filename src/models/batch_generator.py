@@ -4,11 +4,15 @@ import pickle
 import numpy as np
 
 class BatchGenerator(object):
-    def __init__(self, path, batch_size, seq_len):
+    dataset = None
+    labels = None
+    translation = None
+
+    def __init__(self, path, batch_size, seq_len, start=0, stop=-1):
         self.batch_size = batch_size
         self.seq_len = seq_len
 
-        dataset, labels, self.translation = self.load_dataset(path)
+        dataset, labels, self.translation = self.load_dataset(path, start, stop)
         ndataset, nlabels = [], []
         for i in range(len(dataset)):
             if len(dataset[i]) >= seq_len + 1:
@@ -47,10 +51,21 @@ class BatchGenerator(object):
 
         return coords, sequence, reset_states, needed
 
+    def reset(self):
+        self.indices = np.random.choice(len(self.dataset), size=(self.batch_size,), replace=False)
+        self.batches = np.zeros((self.batch_size,), dtype=np.int32)
+
     @staticmethod
-    def load_dataset(path):
-        dataset = np.load(os.path.join(path, 'dataset.npy'))
+    def load_dataset(path, start=0, stop=-1):
+        if BatchGenerator.dataset is None:
+            BatchGenerator.dataset = np.load(os.path.join(path, 'dataset.npy'))
+
+        dataset = BatchGenerator.dataset
         dataset = [np.array(d) for d in dataset]
+        if stop == -1:
+            stop = len(dataset)
+
+        dataset = dataset[start:stop]
         temp = []
         for d in dataset:
             # dataset stores actual pen points, but we will train on differences between consecutive points
@@ -59,7 +74,23 @@ class BatchGenerator(object):
             temp += [np.concatenate([[[0., 0., 1.]], np.concatenate([offs, ends[:, None]], axis=1)], axis=0)]
         # because lines are of different length, we store them in python array (not numpy)
         dataset = temp
-        labels = np.load(os.path.join(path, 'labels.npy'))
-        translation = np.load(os.path.join(path, 'translation'))
+
+        if BatchGenerator.labels is None:
+            BatchGenerator.labels = np.load(os.path.join(path, 'labels.npy'))[start:stop]
+        labels = BatchGenerator.labels
+
+        if BatchGenerator.translation is None:
+            BatchGenerator.translation = np.load(os.path.join(path, 'translation'))
+        translation = BatchGenerator.translation
 
         return dataset, labels, translation
+
+    @staticmethod
+    def dataset_size(path):
+        if BatchGenerator.dataset is None:
+            BatchGenerator.dataset = np.load(os.path.join(path, 'dataset.npy'))
+
+        dataset = BatchGenerator.dataset
+        l = len(dataset)
+        return l
+
