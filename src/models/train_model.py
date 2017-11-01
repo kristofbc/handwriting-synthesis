@@ -409,8 +409,12 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
             chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_optimizer, optimizer)
         # Resume statistics
         if resume_stats == 1:
-            history_network_train = list(np.load(output_dir + "/" + resume_dir + "/history-network-train.npy"))
-            history_network_valid = list(np.load(output_dir + "/" + resume_dir + "/history-network-valid.npy"))
+            try:
+                history_network_train = list(np.load(output_dir + "/" + resume_dir + "/history-network-train.npy"))
+                history_network_valid = list(np.load(output_dir + "/" + resume_dir + "/history-network-valid.npy"))
+            except:
+                logger.info("Unable to find history network train or valid")
+
             offset_epoch = len(history_network_train)
 
     """ Start training """
@@ -515,7 +519,7 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
         logger.info("[TRAIN] Epoch #{0} (COMPLETED IN {1}): mean = {2}, std = {3}, min = {4}, max = {5}, med = {6}".format(e+1, train_time_sum, train_mean, train_std, train_min, train_max, train_med))
 
         # Check if we should validate the data
-        if e % validation_interval == 0:
+        if (e+1) % validation_interval == 0:
             with chainer.using_config('train', False):
                 with function.no_backprop_mode():
                     # Reset completely the state before the validation
@@ -553,7 +557,7 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
                     batch_generator_train.reset()
 
         # Check if we should save the data
-        if e % save_interval == 0:
+        if (e+1) % save_interval == 0:
             logger.info("Saving the model, optimizer and history")
 
             if not os.path.exists(save_dir):
