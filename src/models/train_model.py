@@ -626,13 +626,15 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
             if needed:
                 #print("Reset state")
                 #model.reset_state(xp.asarray(reset))
-                def reset_state(i, m, reset):
-                    if m.xp != np:
-                        m.reset_state(chainer.cuda.to_gpu(reset.copy(), m._device_id))
-                    else:
-                        m.reset_state(reset.copy())
+                def reset_state(i, m, reset, b_size):
+                    m_reset = reset[i*b_size:(i+1)*b_size]
 
-                op_models(models, reset_state, reset)
+                    if m.xp != np:
+                        m.reset_state(chainer.cuda.to_gpu(m_reset.copy(), m._device_id))
+                    else:
+                        m.reset_state(m_reset.copy())
+
+                op_models(models, reset_state, reset, batch_size/len(models))
 
             """ Train the model """
             def make_inputs_models(i, m, coords, seq, b_size):
@@ -644,8 +646,15 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
                 else:
                     return [m_coords, m_seq]
 
+            def exec_model(i, m, x):
+                if xp != np:
+                    with cupy.cuda.Device(m._device_id):
+                        return m(x[i])
+                else:
+                    return m(x[i])
+
             inputs = op_models(models, make_inputs_models, coords, seq, batch_size/len(models))
-            losses = op_models(models, lambda i, m, x: m(x[i]), inputs)
+            losses = op_models(models, exec_model, inputs)
             #loss_t = model([xp.asarray(coords), xp.asarray(seq)])
             #accum_loss += loss_t
 
