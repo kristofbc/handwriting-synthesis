@@ -40,16 +40,19 @@ class LayerNormalization(chainer.Link):
             self._initialize_params(x.shape)
 
         # Layer Normalization parameters
-        mu = F.average(x, axis=1, keepdims=True)
+        size = x.shape[1]
+        #mu = F.average(x, axis=1, keepdims=True)
+        mu = F.sum(x, axis=1, keepdims=True) / size
         mu = F.broadcast_to(mu, x.shape)
-        sigma = F.sqrt(F.average(F.square(x - mu), axis=1, keepdims=True) + self.epsilon)
-        sigma = F.broadcast_to(sigma, x.shape)
+        sigma = F.sqrt(
+            F.sum(F.square(x - mu), axis=1, keepdims=True) / size
+        )
+        sigma = F.broadcast_to(sigma, x.shape) + self.epsilon
 
         # Transformation
         outputs = (x - mu) / sigma
         # Affine transformation
-        outputs = (outputs * self.gain) + self.bias
-        #outputs = F.scale(outputs, self.gain)
-        #outputs = F.bias(outputs, self.bias)
+        #outputs = (outputs * self.gain) + self.bias
+        outputs = F.bias(F.scale(outputs, self.gain), self.bias)
         
         return outputs

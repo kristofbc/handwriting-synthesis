@@ -181,6 +181,75 @@ class TruncatedNormal(initializer.Initializer):
         dist = scipy.stats.truncnorm.rvs(a, b, loc=self.mean, scale=self.std, size=array.shape)
         array[...] = xp.asarray(dist).astype(dtype)
 
+
+class LayerNormalization(chainer.Link):
+    """
+        Implementation of LayerNormalization from Ba, J. L., Kiros, J. R., & Hinton, G. E. (2016). Layer Normalization.
+        Args:
+            hidden_size (int|shape): shape of the hidden size
+            bias_init (float): optional bias parameter
+            gain_init (float): optional gain parameter
+            epsilon (float): computation stability parameters
+    """
+    def __init__(self, hidden_size, bias_init = 0., gain_init = 1., epsilon = 1e-6):
+        super(LayerNormalization, self).__init__()
+        self.hidden_size = hidden_size
+        self.epsilon = epsilon
+
+        with self.init_scope():
+            self.bias = variable.Parameter(bias_init)
+            self.gain = variable.Parameter(gain_init)
+
+            if hidden_size is not None:
+                self._initialize_params(hidden_size)
+
+    def _initialize_params(self, size):
+        self.bias.initialize(size)
+        self.gain.initialize(size)
+        self.hidden_size = size
+
+    def __call__(self, x):
+        """
+            Apply the LayerNormalization on in the input "x"
+            Args:
+                x (float[][]): input tensor to re-center and re-scale (layer normalize)
+            Returns:
+                float[][]
+        """
+        if self.hidden_size is None:
+            self._initialize_params(x.shape)
+
+        # Layer Normalization parameters
+        size = x.shape[1]
+        mu = F.sum(x, axis=1, keepdims=True) / size
+        mu = F.broadcast_to(mu, x.shape)
+        sigma = F.sqrt(
+            F.sum(F.square(x - mu), axis=1, keepdims=True) / size
+        )
+        sigma = F.broadcast_to(sigma, x.shape) + self.epsilon
+
+        # Transformation
+        outputs = (x - mu) / sigma
+        # Affine transformation
+        #outputs = (outputs * self.gain) + self.bias
+        outputs = F.bias(F.scale(outputs, self.gain), self.bias)
+        
+        return outputs
+
+class LayerNormalizationLSTM(chainer.Chain):
+    """
+    Implementation of an layer normalized LSTM: see "Layer Normalization" by Ba. J. et al.
+
+    Args:
+        n_units (int): Number of units inside this LSTM
+        forget_bias_init (float): bias added to the forget gate before sigmoid activation
+        norm_bias_init (float): optional bias parameter
+        norm_gain_init (float): optional gain parameter
+    """
+
+
+
+
 # =============
 # Models (mdls)
 # ============= 
@@ -263,7 +332,7 @@ class Model(chainer.Chain):
         outs = None
         for t in xrange(in_coords.shape[1]):
             #print("{0}/{1}".format(t+1, in_coords.shape[1]))
-            x = in_coords[:, t, :]
+            x_now = in_coords[:, t, :]
 
             # self._states[-3] = window
             # self._states[-2] = k
@@ -276,7 +345,7 @@ class Model(chainer.Chain):
             output_prev = []
             for layer in xrange(len(self.layer_lstms)):
                 # LSTM
-                x = F.concat([x, window] + output_prev, axis=1)
+                x = F.concat([x_now, window] + output_prev, axis=1)
                 c_now, h_now = self._states[2*layer], self._states[2*layer+1]
                 c_new, h_new = self.layer_lstms[layer](c_now, h_now, x)
                 output_prev = [h_new]
