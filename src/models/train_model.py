@@ -11,6 +11,7 @@ import inspect
 import sys
 import logging
 import random
+import copy
 from logging.handlers import RotatingFileHandler
 from logging import handlers
 
@@ -224,9 +225,9 @@ class LayerNormalization(chainer.Link):
         mu = F.sum(x, axis=1, keepdims=True) / size
         mu = F.broadcast_to(mu, x.shape)
         sigma = F.sqrt(
-            F.sum(F.square(x - mu), axis=1, keepdims=True) / size
+            (F.sum(F.square(x - mu), axis=1, keepdims=True) / size) + self.epsilon
         )
-        sigma = F.broadcast_to(sigma, x.shape) + self.epsilon
+        sigma = F.broadcast_to(sigma, x.shape)
 
         # Transformation
         outputs = (x - mu) / sigma
@@ -312,6 +313,7 @@ class Model(chainer.Chain):
         self._states = None
         self._e, self._pi, self._mu1, self._mu2, self._s1, self._s2, self._rho = None, None, None, None, None, None, None
         self._window, self._phi, self._kappa, self._finish = None, None, None, None
+        self.loss = 0.
 
         with self.init_scope():
             self.layer_window = SoftWindow(self._window_mixtures)
@@ -339,6 +341,7 @@ class Model(chainer.Chain):
 
         self._e, self._pi, self._mu1, self._mu2, self._s1, self._s2, self._rho = None, None, None, None, None, None, None
         self._window, self._phi, self._kappa, self._finish = None, None, None, None
+        self.loss = 0.
 
     def get_mdn(self):
         return self._e, self._pi, self._mu1, self._mu2, self._s1, self._s2, self._rho
@@ -427,7 +430,8 @@ class Model(chainer.Chain):
 
         del in_coords, out_coords, data, cs, outs
 
-        return loss
+        self.loss = loss
+        return self.loss
 
 # ===============================================
 # Main entry point of the training process (main)
@@ -490,8 +494,29 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
     offset_epoch = 0
 
     """ Create the model """
-    logger.info("Creating the model")
-    model = Model(rnn_cells_number, rnn_layers_number, mix_comp_number, win_unit_number)    
+    def op_models(models, op, *args):
+        rets = []
+        for i in xrange(len(models)):
+            rets.append(op(i, models[i], *args))
+
+        return rets
+
+    models = []
+    if gpu == -1:
+        logger.info("Creating the model")
+        m = Model(rnn_cells_number, rnn_layers_number, mix_comp_number, win_unit_number)
+        models.append(m)
+    else:
+        gpu = gpu.split(',')
+        logger.info("Creating {0} model(s)".format(len(gpu)))
+
+        for i in xrange(len(gpu)):
+            if i == 0:
+                m = Model(rnn_cells_number, rnn_layers_number, mix_comp_number, win_unit_number)    
+            else:
+                m = copy.deepcopy(models[0])
+
+            models.append(m)
 
     """ Enable cupy, if available """
     if gpu > -1:
@@ -506,7 +531,7 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
     logger.info("Setuping the model")
     #optimizer = chainer.optimizers.Adam(alpha=0.001, beta1=0.90, beta2=0.999, eps=1e-08)
     optimizer = chainer.optimizers.Adam(alpha=learning_rate)
-    optimizer.setup(model)
+    optimizer.setup(models[0])
 
     if grad_clip is not 0:
         optimizer.add_hook(chainer.optimizer.GradientClipping(grad_clip))
@@ -515,7 +540,10 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
         # Resume model and optimizer
         logger.info("Loading state from {}".format(output_dir + '/' + resume_dir))
         if resume_model != "":
-            chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_model, model)
+            chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_model, models[0])
+            for i in xrange(len(models[1:])):
+                models[i] = copy.deepcopy(models[0])
+
         if resume_optimizer != "":
             chainer.serializers.load_npz(output_dir + "/" + resume_dir + "/" + resume_optimizer, optimizer)
         # Resume statistics
@@ -577,7 +605,7 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
     accum_loss = 0
     best_valid_loss = 0
     if truncated_backprop_interval > 0:
-        lr_decay = exponential_decay(learning_rate, 1000, 0.5, staircase=True)
+        lr_decay = exponential_decay(learning_rate, int(math.floor(10000/truncated_backprop_interval)), 0.5, staircase=True)
     else:
         lr_decay = exponential_decay(learning_rate, 10000, 0.5, staircase=True) # If no truncated bpp
 
@@ -589,28 +617,57 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
             coords, seq, reset, needed = batch_generator_train.next_batch()
             if needed:
                 #print("Reset state")
-                model.reset_state(xp.asarray(reset))
+                #model.reset_state(xp.asarray(reset))
+                def reset_state(i, m, reset):
+                    if m.xp != np:
+                        m.reset_state(chainer.cuda.to_gpu(reset.copy(), m._device_id))
+                    else:
+                        m.reset_state(reset.copy())
+
+                op_models(models, reset_state, reset)
 
             """ Train the model """
-            loss_t = model([xp.asarray(coords), xp.asarray(seq)])
-            accum_loss += loss_t
+            def make_inputs_models(i, m, coords, seq):
+                if m.xp != np:
+                    return [chainer.cuda.to_gpu(coords.copy(), m._device_id), chainer.cuda.to_gpu(seq.copy(), m._device_id)]
+                else:
+                    return [coords, seq]
+
+            inputs = op_models(models, make_inputs_models, coords, seq)
+            losses = op_models(models, lambda i, m, x: m(x[0]), inputs)
+            #loss_t = model([xp.asarray(coords), xp.asarray(seq)])
+            #accum_loss += loss_t
 
             # Truncated back-propagation
             if truncated_backprop_interval == 0 or (b+1)%truncated_backprop_interval == 0 or b == batches_per_epoch+1:
-                model.cleargrads()
-                accum_loss.backward()
+                op_models(models, lambda i, model: model.cleargrads())
+                #model.cleargrads()
+                #accum_loss.backward()
+                op_models(losses, lambda i, loss: loss.backward())
 
                 if truncated_backprop_interval > 0:
-                    accum_loss.unchain_backward()
+                    #accum_loss.unchain_backward()
+                    op_models(losses, lambda i, loss: loss.unchain_backward())
+
+                if len(models) > 1:
+                    op_models(models[0:1], 
+                              lambda i, model, models: [model.addgrads(models[j]) for j in xrange(len(models))], 
+                              models[1:])
 
                 optimizer.update()
+
+                if len(models) > 1:
+                    op_models(models[1:], 
+                              lambda i, model, master: model.copyparams(master), 
+                              models[0])
                 
                 # Exponential decay on the learning rate
                 optimizer.alpha = lr_decay(optimizer.t)
-                accum_loss = 0
+                losses = []
+                #accum_loss = 0
 
-            loss = cuda.to_cpu(loss_t.data)
-            del loss_t
+            loss = cuda.to_cpu(models[0].loss.data)
+            #del loss_t
 
             time_iteration_end = time.time()-time_iteration_start
             history_train.append([loss, time_iteration_end])
@@ -635,15 +692,15 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
             with chainer.using_config('train', False):
                 with function.no_backprop_mode():
                     # Reset completely the state before the validation
-                    model.reset_state()
+                    models[0].reset_state()
                     for b in xrange(batches_per_epoch_valid):
                         time_iteration_start = time.time()
                         coords, seq, reset, needed = batch_generator_validation.next_batch()
                         if needed:
                             #print("Reset state")
-                            model.reset_state(xp.asarray(reset))
+                            models[0].reset_state(xp.asarray(reset))
 
-                        loss_t = model([xp.asarray(coords), xp.asarray(seq)])
+                        loss_t = models[0]([xp.asarray(coords), xp.asarray(seq)])
                         loss = cuda.to_cpu(loss_t.data)
                         del loss_t
 
