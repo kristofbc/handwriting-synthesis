@@ -464,6 +464,7 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
     batches_per_epoch_valid = int(len(batch_generator_validation.dataset)/batch_size) # Compute all the batches inside one epoch
     itr = 0
     accum_loss = 0
+    best_valid_loss = 0
     if truncated_backprop_interval > 0:
         lr_decay = exponential_decay(learning_rate, 1000, 0.5, staircase=True)
     else:
@@ -555,6 +556,20 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
                     model.reset_state()
                     batch_generator_validation.reset()
                     batch_generator_train.reset()
+
+
+            # If a "best" model is found, save it
+            if valid_mean < best_valid_loss:
+                best_valid_loss = valid_mean
+
+                logger.info("Best fit found for epoch {0} with loss {1}".format(e+1, best_valid_loss))
+
+                if not os.path.exists(save_dir):
+                    os.makedirs(save_dir)
+
+                # Save the model and optimizer
+                chainer.serializers.save_npz(save_dir + '/model-best', model)
+                chainer.serializers.save_npz(save_dir + '/state-best', optimizer)
 
         # Check if we should save the data
         if (e+1) % save_interval == 0:
