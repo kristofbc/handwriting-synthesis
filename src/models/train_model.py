@@ -231,14 +231,13 @@ class LayerNormalization(chainer.Link):
         # Transformation
         outputs = (x - mu) / sigma
         # Affine transformation
-        #outputs = (outputs * self.gain) + self.bias
-        outputs = F.bias(F.scale(outputs, self.gain), self.bias)
+        outputs = (outputs * self.gain) + self.bias
         
         return outputs
 
-class LayerNormalizationLSTM(chainer.Chain):
+class LayerNormalizationStatelessLSTM(chainer.Chain):
     """
-    Implementation of an layer normalized LSTM: see "Layer Normalization" by Ba. J. et al.
+    Implementation of an layer normalized StatelessLSTM: see "Layer Normalization" by Ba. J. et al.
 
     Args:
         n_units (int): Number of units inside this LSTM
@@ -246,9 +245,51 @@ class LayerNormalizationLSTM(chainer.Chain):
         norm_bias_init (float): optional bias parameter
         norm_gain_init (float): optional gain parameter
     """
+    def __init__(self, n_units, forget_bias_init = 0., norm_bias_init = 1., norm_gain_init = 0.):
+        super(LayerNormalizationStatelessLSTM, self).__init__()
 
+        self.n_units = n_units
+        self.forget_bias = forget_bias_init
 
+        with self.init_scope():
+            self.h_x = L.Linear(4*n_units)
+            self.h_h = L.Linear(4*n_units)
+            self.norm_c = LayerNormalization(None, norm_bias_init, norm_gain_init)
+            self.norm_x = LayerNormalization(None, norm_bias_init, norm_gain_init)
+            self.norm_h = LayerNormalization(None, norm_bias_init, norm_gain_init)
 
+    def __call__(self, c, h, x, b = None):
+        """
+            Perform the LSTM op
+            Args:
+                inputs (float[][]): input tensor containing "x" to transform
+                c (float[][]): previous LSTM cell state
+                h (float[][]): previous LSTM output
+                x (float[][]): current input to transform
+                b (float[][]): optional bias added to the gates
+        """
+        f_i_o_g = self.norm_x(self.h_x(x)) + self.norm_h(self.h_h(h))
+        if b is not None:
+            f_i_o_g = F.bias(f_i_o_g, b)
+
+        # Compute the LSTM using Chainer's function to be able to use LayerNormalization
+        def extract_gates(x):
+            r = F.reshape(x, (x.shape[0], x.shape[1] // 4, 4) + x.shape[2:])
+            return F.split_axis(r, 4, axis=2)
+
+        f, i, o, g = extract_gates(f_i_o_g)
+        # Remove unused dimension and apply transformation
+        f = F.sigmoid(F.squeeze(f, axis=2) + self.forget_bias)
+        i = F.sigmoid(F.squeeze(i, axis=2))
+        o = F.sigmoid(F.squeeze(o, axis=2))
+        g = F.tanh(F.squeeze(g, axis=2))
+
+        # Transform
+        ct = g * i + f * c
+        # Apply LayerNormalization
+        ht = o * F.tanh(self.norm_c(ct))
+
+        return ct, ht
 
 # =============
 # Models (mdls)
@@ -274,7 +315,8 @@ class Model(chainer.Chain):
 
         with self.init_scope():
             self.layer_window = SoftWindow(self._window_mixtures)
-            self.layer_lstms = [L.StatelessLSTM(self._num_units) for _ in xrange(self._rnn_layers)]
+            #self.layer_lstms = [L.StatelessLSTM(self._num_units) for _ in xrange(self._rnn_layers)]
+            self.layer_lstms = [LayerNormalizationStatelessLSTM(self._num_units) for _ in xrange(self._rnn_layers)]
             self.layer_mixture_density = MixtureDensity(self._output_mixtures, bias)
 
     def to_gpu(self, device=None):
