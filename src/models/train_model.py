@@ -74,6 +74,7 @@ class SoftWindow(chainer.Chain):
 
         """
         batch_size, seq_len, num_letters = cs.shape
+        xp = cuda.get_array_module(*x)
 
         alpha = self.layer_linear_alpha(x)
         alpha = F.exp(alpha)
@@ -86,7 +87,7 @@ class SoftWindow(chainer.Chain):
         b = F.expand_dims(beta, axis=2)
         k = F.expand_dims(k_prev + kappa, axis=2)
 
-        u = -F.expand_dims(F.expand_dims(self.xp.arange(0, seq_len).astype(self.xp.float32), axis=0), axis=0)
+        u = -F.expand_dims(F.expand_dims(xp.arange(0, seq_len).astype(xp.float32), axis=0), axis=0)
         u = F.broadcast_to(u, (k.shape[0], k.shape[1], seq_len))
         phi = F.exp(-F.square(F.broadcast_to(k, (k.shape[0], k.shape[1], seq_len)) + u) * F.broadcast_to(b, (b.shape[0], b.shape[1], seq_len)))
         phi = phi * F.broadcast_to(a, (a.shape[0], a.shape[1], seq_len)) # (batch_size, mixtures, length)
@@ -95,7 +96,7 @@ class SoftWindow(chainer.Chain):
         # If the network is done generating the sequence
         # (64, 10, 65) > (64,) = (64,)
         # finish = F.where(phi[:, 0, -1] > F.max(phi[:, 0, :-1], axis=1), 1., 0.) # not implemented
-        finish = variable.Variable(phi.data[:, 0, -1] > self.xp.max(phi.data[:, 0, :-1], axis=1)) # Break the chain for the finish variable (it's not differentiable anyways)
+        finish = variable.Variable(phi.data[:, 0, -1] > xp.max(phi.data[:, 0, :-1], axis=1)) # Break the chain for the finish variable (it's not differentiable anyways)
 
         k = F.squeeze(k, axis=2)
         window = F.squeeze(F.batch_matmul(phi, cs), axis=1)
@@ -363,11 +364,12 @@ class Model(chainer.Chain):
         data, cs = inputs
         seq_len, num_letters = cs.shape[1:]
         batch_size, t_max, x_dim = data.shape
+        xp = cuda.get_array_module(*data)
 
         if self._states is None:
             sizes = [self._num_units] * self._rnn_layers * 2 + [num_letters, self._window_mixtures, 1]
             # 9: (64, 400) * 6 [LSTM:cs, LSTM:hs], (64, 80) [SoftWindow:window], (64, 10) [SoftWindow:k], (64, 1) [SoftWindow:finish]
-            self._states = [self.xp.zeros((batch_size, s), dtype=self.xp.float32) for s in sizes]
+            self._states = [xp.zeros((batch_size, s), dtype=xp.float32) for s in sizes]
             #for s in xrange(len(self._states)):
             #    print(self._states[s].shape)
             #exit()
