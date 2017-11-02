@@ -325,6 +325,8 @@ class Model(chainer.Chain):
         super(Model, self).to_gpu(device)
         for i in xrange(len(self.layer_lstms)):
             self.layer_lstms[i].to_gpu(device)
+        self.layer_window.to_gpu(device)
+        self.layer_mixture_density.to_gpu(device)
 
     def reset_state(self, state=None):
         """
@@ -631,14 +633,17 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
                 op_models(models, reset_state, reset)
 
             """ Train the model """
-            def make_inputs_models(i, m, coords, seq):
-                if m.xp != np:
-                    return [chainer.cuda.to_gpu(coords.copy(), m._device_id), chainer.cuda.to_gpu(seq.copy(), m._device_id)]
-                else:
-                    return [coords, seq]
+            def make_inputs_models(i, m, coords, seq, b_size):
+                m_coords = coords[i*b_size:(i+1)*b_size]
+                m_seq = seq[i*b_size:(i+1)*b_size]
 
-            inputs = op_models(models, make_inputs_models, coords, seq)
-            losses = op_models(models, lambda i, m, x: m(x[0]), inputs)
+                if m.xp != np:
+                    return [chainer.cuda.to_gpu(m_coords.copy(), m._device_id), chainer.cuda.to_gpu(m_seq.copy(), m._device_id)]
+                else:
+                    return [m_coords, m_seq]
+
+            inputs = op_models(models, make_inputs_models, coords, seq, batch_size/len(models))
+            losses = op_models(models, lambda i, m, x: m(x[i]), inputs)
             #loss_t = model([xp.asarray(coords), xp.asarray(seq)])
             #accum_loss += loss_t
 
