@@ -502,30 +502,22 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
         return rets
 
     models = []
-    if gpu == -1:
+    gpus = []
+    if gpu == "-1":
         logger.info("Creating the model")
         m = Model(rnn_cells_number, rnn_layers_number, mix_comp_number, win_unit_number)
         models.append(m)
     else:
-        gpu = gpu.split(',')
+        gpus = gpu.split(',')
         logger.info("Creating {0} model(s)".format(len(gpu)))
 
-        for i in xrange(len(gpu)):
+        for i in xrange(len(gpus)):
             if i == 0:
                 m = Model(rnn_cells_number, rnn_layers_number, mix_comp_number, win_unit_number)    
             else:
                 m = copy.deepcopy(models[0])
 
             models.append(m)
-
-    """ Enable cupy, if available """
-    if gpu > -1:
-        logger.info("Enabling CUpy")
-        chainer.cuda.get_device_from_id(gpu).use()
-        xp = cupy
-        model.to_gpu()
-    else:
-        xp = np
 
     """ Setup the model """
     logger.info("Setuping the model")
@@ -555,6 +547,18 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
                 logger.info("Unable to find history network train or valid")
 
             offset_epoch = len(history_network_train)
+
+    """ Enable cupy, if available """
+    xp = np
+    for i in xrange(len(gpus)):
+        logger.info("Enabling CUpy for model #{0}".format(i))
+
+        if i == 0:
+            chainer.cuda.get_device_from_id(int(gpus[i])).use()
+
+        models[i].to_gpu(int(gpus[i]))
+
+        xp = cupy
 
     """ Start training """
     xp.random.seed(random_seed)
@@ -776,7 +780,7 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
 @click.option('--resume_model', type=click.STRING, default='', help='Name of the model snapshot.')
 @click.option('--resume_optimizer', type=click.STRING, default='', help='Name of the optimizer snapshot.')
 @click.option('--resume_stats', type=click.INT, default=0, help='Resume the statistics (new stats will be combined with old statistics).')
-@click.option('--gpu', type=click.INT, default=-1, help='GPU ID (negative value is CPU).')
+@click.option('--gpu', type=click.STRING, default="-1", help='GPU ID (negative value is CPU).')
 @click.option('--save_interval', type=click.INT, default=10, help='How often the model should be saved.')
 @click.option('--validation_interval', type=click.INT, default=1, help='How often the model should be validated.')
 @click.option('--truncated_backprop_interval', type=click.INT, default=10, help='Run the truncated backpropagation algorithm at each n iteration.')
