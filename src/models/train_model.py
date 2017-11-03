@@ -712,12 +712,15 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
             with chainer.using_config('train', False):
                 with function.no_backprop_mode():
                     # Reset completely the state before the validation
-                    models[0].reset_state()
+                    op_models(models, lambda i, m: m.reset_state())
+
+                    #models[0].reset_state()
                     for b in xrange(1, batches_per_epoch_valid+1):
                         time_iteration_start = time.time()
                         coords, seq, reset, needed = batch_generator_validation.next_batch()
                         if needed:
                             #print("Reset state")
+                            # Only on the first model because it's the only one computing validation
                             models[0].reset_state(xp.asarray(reset))
 
                         loss_t = models[0]([xp.asarray(coords), xp.asarray(seq)])
@@ -741,7 +744,7 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
                                 .format(e+1, valid_time_sum, valid_mean, valid_std, valid_min, valid_max, valid_med))
 
                     # Completely reset the state for the next training phase
-                    model.reset_state()
+                    op_models(models, lambda i, m: m.reset_state())
                     batch_generator_validation.reset()
                     batch_generator_train.reset()
 
