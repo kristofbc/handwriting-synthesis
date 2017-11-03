@@ -759,7 +759,7 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
                     os.makedirs(save_dir)
 
                 # Save the model and optimizer
-                chainer.serializers.save_npz(save_dir + '/model-best', model)
+                chainer.serializers.save_npz(save_dir + '/model-best', models[0])
                 chainer.serializers.save_npz(save_dir + '/state-best', optimizer)
 
         # Check if we should save the data
@@ -770,7 +770,7 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
                 os.makedirs(save_dir)
 
             # Save the model and optimizer
-            chainer.serializers.save_npz(save_dir + '/model-{}'.format(e+1), model)
+            chainer.serializers.save_npz(save_dir + '/model-{}'.format(e+1), models[0])
             chainer.serializers.save_npz(save_dir + '/state-{}'.format(e+1), optimizer)
 
             # Save the stats
