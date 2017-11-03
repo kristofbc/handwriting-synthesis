@@ -713,7 +713,7 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
                 with function.no_backprop_mode():
                     # Reset completely the state before the validation
                     models[0].reset_state()
-                    for b in xrange(batches_per_epoch_valid):
+                    for b in xrange(1, batches_per_epoch_valid+1):
                         time_iteration_start = time.time()
                         coords, seq, reset, needed = batch_generator_validation.next_batch()
                         if needed:
