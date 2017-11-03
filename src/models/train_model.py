@@ -485,18 +485,6 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
         logger.info("Enabling Chainer's debug mode")
         chainer.config.debug = True
 
-    """ Fetching the model and the inputs """
-    logger.info("Fetching the model and the inputs")
-    dataset_size = BatchGenerator.dataset_size(data_dir)
-    validation_size = int(math.floor(dataset_size*validation_split))
-    train_size = int(dataset_size-validation_size)
-    batch_generator_train = BatchGenerator(data_dir, batch_size, min_sequence_length, 0, train_size)
-    batch_generator_validation = BatchGenerator(data_dir, batch_size, min_sequence_length, train_size)
-
-    history_network_train = []
-    history_network_valid = []
-    offset_epoch = 0
-
     """ Create the model """
     def op_models(models, op, *args):
         rets = []
@@ -551,6 +539,18 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
                 logger.info("Unable to find history network train or valid")
 
             offset_epoch = len(history_network_train)
+
+    """ Fetching the model and the inputs """
+    logger.info("Fetching the model and the inputs")
+    dataset_size = BatchGenerator.dataset_size(data_dir)
+    validation_size = int(math.floor(dataset_size*validation_split))
+    train_size = int(dataset_size-validation_size)
+    batch_generator_train = BatchGenerator(data_dir, batch_size, min_sequence_length, 0, train_size)
+    batch_generator_validation = BatchGenerator(data_dir, int(math.floor(batch_size/max(1, len(gpus)))), min_sequence_length, train_size)
+
+    history_network_train = []
+    history_network_valid = []
+    offset_epoch = 0
 
     """ Enable cupy, if available """
     xp = np
@@ -608,7 +608,7 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
         return cb
 
     batches_per_epoch = 1000
-    batches_per_epoch_valid = int(len(batch_generator_validation.dataset)/batch_size) # Compute all the batches inside one epoch
+    batches_per_epoch_valid = int(math.floor(len(batch_generator_validation.dataset)/batch_generator_validation.batch_size)) # Compute all the batches inside one epoch
     itr = 0
     accum_loss = 0
     best_valid_loss = 0
