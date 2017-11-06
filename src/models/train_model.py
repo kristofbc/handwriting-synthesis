@@ -146,44 +146,6 @@ class MixtureDensity(chainer.Chain):
 
         return e, pi, mu1, mu2, s1, s2, rho
 
-
-# ==================
-# Initializer (init)
-# ==================
-class TruncatedNormal(initializer.Initializer):
-
-    """Initialize an array with a truncated normal distribution
-
-    All values with more than 'magnitude' standard deviation from the mean are dropped and re-picked.
-    Similar to TensorFlow:truncated_normal and Keras:truncated_normal
-
-    Args:
-        mean (float): mean of the normal distribution
-        std (float): standard deviation of the normal distribution
-        magnitude (int): magnitude of the value from the mean before re-sampling
-        dtype: Data type specifier
-    """
-
-    def __init__(self, mean=0.0, std=1.0, magnitude=2., dtype=None):
-        self.mean = mean
-        self.std = std
-        self.magnitude = magnitude
-        super(TruncatedNormal, self).__init__(dtype)
-
-    def __call__(self, array):
-        if self.dtype is not None:
-            assert array.dtype == self.dtype
-            dtype = self.dtype
-        else:
-            dtype = array.dtype
-
-        xp = cuda.get_array_module(array)
-        a, b = self.mean - self.magnitude * self.std, self.mean + self.magnitude * self.std
-        # Use scipy truncated normal function
-        dist = scipy.stats.truncnorm.rvs(a, b, loc=self.mean, scale=self.std, size=array.shape)
-        array[...] = xp.asarray(dist).astype(dtype)
-
-
 class LayerNormalization(chainer.Link):
     """
         Implementation of LayerNormalization from Ba, J. L., Kiros, J. R., & Hinton, G. E. (2016). Layer Normalization.
@@ -254,13 +216,13 @@ class LayerNormalizationStatelessLSTM(chainer.Chain):
         self.forget_bias = forget_bias_init
 
         with self.init_scope():
-            self.h_x = L.Linear(4*n_units)
-            self.h_h = L.Linear(4*n_units)
+            self.h_x = L.Linear(4*n_units, nobias=True)
+            self.h_h = L.Linear(4*n_units, nobias=True)
             self.norm_c = LayerNormalization(None, norm_bias_init, norm_gain_init)
             self.norm_x = LayerNormalization(None, norm_bias_init, norm_gain_init)
             self.norm_h = LayerNormalization(None, norm_bias_init, norm_gain_init)
 
-    def __call__(self, c, h, x, b = None):
+    def __call__(self, c, h, x, W_x=None, W_h=None, b_h = None):
         """
             Perform the LSTM op
             Args:
@@ -268,11 +230,16 @@ class LayerNormalizationStatelessLSTM(chainer.Chain):
                 c (float[][]): previous LSTM cell state
                 h (float[][]): previous LSTM output
                 x (float[][]): current input to transform
-                b (float[][]): optional bias added to the gates
+                W_x (float[][]): optional weight matrix for x
+                W_h (float[][]): optional weight matrix for h
+                b_h (float[][]): optional bias added to the gates
         """
-        f_i_o_g = self.norm_x(self.h_x(x)) + self.norm_h(self.h_h(h))
-        if b is not None:
-            f_i_o_g = F.bias(f_i_o_g, b)
+        h_x = self.h_x(x) if W_x is None else F.linear(x, W_x)
+        h_h = self.h_h(h) if W_h is None else F.linear(h, W_h)
+
+        f_i_o_g = self.norm_x(h_x) + self.norm_h(h_h)
+        if b_h is not None:
+            f_i_o_g = F.bias(f_i_o_g, b_h)
 
         # Compute the LSTM using Chainer's function to be able to use LayerNormalization
         def extract_gates(x):
@@ -292,6 +259,158 @@ class LayerNormalizationStatelessLSTM(chainer.Chain):
         ht = o * F.tanh(self.norm_c(ct))
 
         return ct, ht
+
+class AdaptiveWeightNoise(chainer.Link):
+    """
+        Alex Grave's Adaptive Weight Noise
+        From: Practical Variational Inference for Neural Networks.
+    """
+    def __init__(self, in_size, out_size, normal_scale=0.1, no_bias=False, initial_bias=0):
+        super(AdaptiveWeightNoise, self).__init__()
+        self.out_size = out_size
+        self.in_size = in_size
+        self.normal_scale = normal_scale
+        self.no_bias = no_bias
+        self.initial_bias = initial_bias
+
+        with self.init_scope():
+            if no_bias:
+                self.mu = chainer.Parameter(TruncatedNormal(mean=normal_scale))
+            else:
+                self.mu = chainer.Parameter(TruncatedNormalBias(TruncatedNormal(mean=normal_scale), self.out_size, self.initial_bias))
+
+            self.sigma = chainer.Parameter(initializers._get_initializer(self.xp.log(1e-10)))
+
+            if in_size is not None:
+                self._initialize_params(in_size)
+
+    def _initialize_params(self, in_size):
+        self.mu.initialize((self.out_size*in_size))
+        self.sigma.initialize((self.out_size*in_size))
+        self.in_size = in_size
+
+    def get_test_weight(self, in_size=None):
+        """
+            When testing, do not generate AWN weights and biases, use the current configuration
+            Args:
+                in_size (int): Input size of the variable to transform
+            Returns:
+                weights(float[][])
+        """
+        if self.in_size is None:
+            if in_size is None:
+                raise ValueError("in_size should not be none for test weights")
+
+            self.in_size = in_size
+
+        if self.no_bias:
+            return F.reshape(self.mu, (self.out_size, self.in_size)), None
+        else:
+            w, b = F.split_axis(self.mu, [self.out_size*(self.in_size-1)], axis=0)
+            return F.reshape(w, (self.out_size, self.in_size-1)), b
+
+    def __call__(self, batch_size, in_size=None):
+        """
+            Update the weigths
+            Args:
+                batch_size (Variable): Size of the current batch
+                in_size (int): Input size of the variable to transform
+            Returns:
+                weight (float[][]), loss (float)
+        """
+        if self.mu.data is None or self.sigma.data is None:
+            if in_size is None:
+                raise ValueError("AdaptiveWeightNoise requires a in_size to intialize it's Parameters")
+
+            self._initialize_params(in_size)
+
+        # Base parameters
+        mu_h = F.broadcast_to(F.mean(self.mu), self.mu.shape)
+        diff_mu_h = F.square(self.mu - mu_h)
+        sigma_h = F.broadcast_to(F.mean(F.exp(self.sigma) + diff_mu_h), self.sigma.shape)
+
+        # Weight and bias
+        eps = variable.Variable(self.xp.random.randn(self.mu.size).astype(self.xp.float32))
+        W = self.mu + eps * F.sqrt(F.exp(self.sigma))
+
+        # Loss
+        loss_x = (F.log(sigma_h) - self.sigma) / 2.
+        loss_y = (diff_mu_h + F.exp(self.sigma) - sigma_h) / ((2. * sigma_h) + 1e-8)
+        loss = F.reshape(F.sum(loss_x + loss_y), (1,)) / batch_size
+
+        # Extract the bias if required
+        if self.no_bias:
+            return F.reshape(W, (self.out_size, self.in_size)), None, loss
+        else:
+            w, b = F.split_axis(W, [self.out_size*(self.in_size-1)], axis=0)
+            return F.reshape(w, (self.out_size, self.in_size-1)), b, loss
+
+
+# ==================
+# Initializer (init)
+# ==================
+class TruncatedNormal(initializer.Initializer):
+
+    """Initialize an array with a truncated normal distribution
+
+    All values with more than 'magnitude' standard deviation from the mean are dropped and re-picked.
+    Similar to TensorFlow:truncated_normal and Keras:truncated_normal
+
+    Args:
+        mean (float): mean of the normal distribution
+        std (float): standard deviation of the normal distribution
+        magnitude (int): magnitude of the value from the mean before re-sampling
+        dtype: Data type specifier
+    """
+
+    def __init__(self, mean=0.0, std=1.0, magnitude=2., dtype=None):
+        self.mean = mean
+        self.std = std
+        self.magnitude = magnitude
+        super(TruncatedNormal, self).__init__(dtype)
+
+    def __call__(self, array):
+        if self.dtype is not None:
+            assert array.dtype == self.dtype
+            dtype = self.dtype
+        else:
+            dtype = array.dtype
+
+        xp = cuda.get_array_module(array)
+        a, b = self.mean - self.magnitude * self.std, self.mean + self.magnitude * self.std
+        # Use scipy truncated normal function
+        dist = scipy.stats.truncnorm.rvs(a, b, loc=self.mean, scale=self.std, size=array.shape)
+        array[...] = xp.asarray(dist).astype(dtype)
+
+class TruncatedNormalBias(initializer.Initializer):
+
+    """ Use the base TruncatedNormal class but adds a bias to the result
+
+    Args:
+        truncated_normal (Initializer): the initialized TruncatedNormal initializer
+        out_size (int): output size
+        bias (float): initial bias
+        dtype: Data type specifier
+    """
+    
+    def __init__(self, truncated_normal, out_size, bias = 0., dtype=None):
+        self.truncated_normal = truncated_normal
+        self.out_size = out_size
+        self.bias = bias
+        super(TruncatedNormalBias, self).__init__(dtype)
+
+    def __call__(self, array):
+        xp = cuda.get_array_module(array)
+        in_size = array.shape[0]/self.out_size
+        normal = xp.zeros((self.out_size*(in_size-1))).astype(self.dtype)
+        normal = xp.expand_dims(normal, axis=0)
+
+        # Apply the truncated normal initializer
+        self.truncated_normal(normal)
+
+        # Apply the bias
+        bias = xp.ones((1, self.out_size)).astype(self.dtype) * self.bias
+        array[...] = xp.concatenate((normal, bias), axis=1).reshape(array.shape)
 
 # =============
 # Models (mdls)
@@ -321,11 +440,15 @@ class Model(chainer.Chain):
             #self.layer_lstms = [L.StatelessLSTM(self._num_units) for _ in xrange(self._rnn_layers)]
             self.layer_lstms = [LayerNormalizationStatelessLSTM(self._num_units) for _ in xrange(self._rnn_layers)]
             self.layer_mixture_density = MixtureDensity(self._output_mixtures, bias)
+            self.layer_lstms_awn_x = [AdaptiveWeightNoise(None, 4*self._num_units, normal_scale=0., no_bias=True) for _ in xrange(self._rnn_layers)]
+            self.layer_lstms_awn_h = [AdaptiveWeightNoise(None, 4*self._num_units, normal_scale=0.) for _ in xrange(self._rnn_layers)]
 
     def to_gpu(self, device=None):
         super(Model, self).to_gpu(device)
         for i in xrange(len(self.layer_lstms)):
             self.layer_lstms[i].to_gpu(device)
+            self.layer_lstms_awn_x[i].to_gpu(device)
+            self.layer_lstms_awn_h[i].to_gpu(device)
         self.layer_window.to_gpu(device)
         self.layer_mixture_density.to_gpu(device)
 
@@ -361,7 +484,7 @@ class Model(chainer.Chain):
             Args:
                 inputs (float[][]): x, cs
         """
-        data, cs = inputs
+        data, cs, dataset_size = inputs
         seq_len, num_letters = cs.shape[1:]
         batch_size, t_max, x_dim = data.shape
         xp = cuda.get_array_module(*data)
@@ -376,6 +499,12 @@ class Model(chainer.Chain):
 
         in_coords = data[:, :-1, :] # (batch_size, time step, coord)
         out_coords = data[:, 1:, :]
+
+        # Adaptive Weights and bias
+        #awn_w_x = [self.layer_lstms_awn_x[i](dataset_size / batch_size, 3 + num_letters) for i in xrange(len(self.layer_lstms_awn_x))] # +3 = x1,x2,eos
+        #awn_w_h = [self.layer_lstms_awn_h[i](dataset_size / batch_size, self._num_units+1) for i in xrange(len(self.layer_lstms_awn_x))] # +1 = bias
+        awn_w_x = [None for _ in xrange(len(self.layer_lstms_awn_x))]
+        awn_w_h = [None for _ in xrange(len(self.layer_lstms_awn_h))]
 
         # Unroll the RNN for each time steps
         outs = None
@@ -393,10 +522,17 @@ class Model(chainer.Chain):
             state_output = []
             output_prev = []
             for layer in xrange(len(self.layer_lstms)):
-                # LSTM
                 x = F.concat([x_now, window] + output_prev, axis=1)
+
+                if awn_w_x[layer] is None:
+                    awn_w_x[layer] = self.layer_lstms_awn_x[layer](dataset_size // batch_size, x.size // x.shape[0])
+                
+                if awn_w_h[layer] is None:
+                    awn_w_h[layer] = self.layer_lstms_awn_h[layer](dataset_size // batch_size, self._num_units+1)
+
+                # LSTM
                 c_now, h_now = self._states[2*layer], self._states[2*layer+1]
-                c_new, h_new = self.layer_lstms[layer](c_now, h_now, x)
+                c_new, h_new = self.layer_lstms[layer](c_now, h_now, x, awn_w_x[layer][0], awn_w_h[layer][0], awn_w_h[layer][1])
                 output_prev = [h_new]
                 state_output += [c_new, h_new]
 
@@ -646,15 +782,15 @@ def main(data_dir, output_dir, batch_size, min_sequence_length, validation_split
                 else:
                     return [m_coords, m_seq]
 
-            def exec_model(i, m, x):
+            def exec_model(i, m, x, dataset_size):
                 if xp != np:
                     with cupy.cuda.Device(m._device_id):
-                        return m(x[i])
+                        return m(x[i] + [dataset_size])
                 else:
-                    return m(x[i])
+                    return m(x[i] + [dataset_size])
 
             inputs = op_models(models, make_inputs_models, coords, seq, batch_size/len(models))
-            losses = op_models(models, exec_model, inputs)
+            losses = op_models(models, exec_model, inputs, dataset_size)
             #loss_t = model([xp.asarray(coords), xp.asarray(seq)])
             #accum_loss += loss_t
 
